@@ -1,38 +1,12 @@
 # Jackify Changelog
 
-## v0.1.6.1 - Critical Configuration and Legacy .NET Fixes
+## v0.1.6.1 - Fix dotnet40 install and expand Game Proton override
 **Release Date:** October 21, 2025
 
 ### Bug Fixes
-- **Fixed FILFY Configuration Error**: Resolved "set_modlist failed" error in Configure New Modlist workflow
-  - Added missing `appid` field to configuration context in `configure_modlist` method
-  - Affects edge case where users configure modlists via specific GUI workflows
-  - Ensures consistent context handling across all configuration paths
-
-- **Fixed Steam CompatToolMapping Creation**: Resolved Proton version setting failures on fresh Steam installations
-  - Native Steam service now creates missing CompatToolMapping section automatically
-  - Prevents "CompatToolMapping section not found" errors during shortcut creation
-  - Ensures consistent Proton configuration across all Steam setups
-
-- **Fixed Lost Legacy .NET Requirements**: Corrected dotnet48 installation failures
-  - Changed Lost Legacy requirement from dotnet48 to dotnet40 (which actually works)
-  - Added Lost Legacy Proton 9 override for ENB compatibility
-  - Resolves widespread .NET Framework installation failures
-
-- **Added Automatic Symlink Handling**: Wine symlink compatibility improvements
-  - Automatically detects symlinked downloads_directory in ModOrganizer.ini
-  - Comments out symlinked paths to avoid Wine symlink following issues
-  - Enables MO2 to use default download location instead of broken symlink paths
-
-- **Enhanced Dotfiles and Symlinks Support**: Automatic Wine prefix configuration
-  - Automatically enables ShowDotFiles and symlink support during .NET component installation
-  - Improves compatibility with various file system configurations
-  - Applied to all modlists using legacy .NET components
-
-### Code Quality
-- **Removed Unprofessional Elements**: Cleaned up all emoji usage in logs and user output
-  - Maintains professional appearance in all user-facing messages
-  - Follows established coding standards
+- **Fixed dotnet40 Installation Failures**: Resolved widespread .NET Framework installation issues affecting multiple modlists
+- **Added Lost Legacy Proton 9 Override**: Automatic ENB compatibility for Lost Legacy modlist
+- **Fixed Symlinked Downloads**: Automatically handles symlinked download directories to avoid Wine compatibility issues
 
 ---
 
