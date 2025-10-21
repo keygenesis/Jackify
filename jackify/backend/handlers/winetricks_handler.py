@@ -262,10 +262,18 @@ class WinetricksHandler:
         config_handler = ConfigHandler()
         use_winetricks = config_handler.get('use_winetricks_for_components', True)
 
+        # Legacy .NET Framework versions that are problematic in Wine/Proton
+        legacy_dotnet_versions = ['dotnet40', 'dotnet472', 'dotnet48']
+
+        # Check if any legacy .NET Framework versions are present
+        has_legacy_dotnet = any(comp in components_to_install for comp in legacy_dotnet_versions)
+
         # Choose installation method based on user preference and components
-        if use_winetricks and "dotnet40" in components_to_install:
-            self.logger.info("Using optimized approach: protontricks for dotnet40 (reliable), winetricks for other components (fast)")
-            return self._install_components_hybrid_approach(components_to_install, wineprefix, game_var)
+        # ALWAYS use hybrid approach when legacy .NET Framework versions are present
+        if has_legacy_dotnet:
+            legacy_found = [comp for comp in legacy_dotnet_versions if comp in components_to_install]
+            self.logger.info(f"Using hybrid approach: protontricks for legacy .NET versions {legacy_found} (reliable), {'winetricks' if use_winetricks else 'protontricks'} for other components")
+            return self._install_components_hybrid_approach(components_to_install, wineprefix, game_var, use_winetricks)
         elif not use_winetricks:
             self.logger.info("Using legacy approach: protontricks for all components")
             return self._install_components_protontricks_only(components_to_install, wineprefix, game_var)
@@ -453,7 +461,7 @@ class WinetricksHandler:
                     )
 
                     if result.returncode == 0:
-                        self.logger.info(f"✓ {component} installed successfully")
+                        self.logger.info(f"{component} installed successfully")
                         component_success = True
                         break
                     else:
@@ -467,13 +475,13 @@ class WinetricksHandler:
                                 try:
                                     with open(log_path, 'r') as f:
                                         if 'dotnet40' in f.read():
-                                            self.logger.info("✓ dotnet40 confirmed in winetricks.log")
+                                            self.logger.info("dotnet40 confirmed in winetricks.log")
                                             component_success = True
                                             break
                                 except Exception as e:
                                     self.logger.warning(f"Could not read winetricks.log: {e}")
 
-                        self.logger.error(f"✗ {component} failed (attempt {attempt}): {result.stderr.strip()}")
+                        self.logger.error(f"{component} failed (attempt {attempt}): {result.stderr.strip()}")
                         self.logger.debug(f"Full stdout for {component}: {result.stdout.strip()}")
 
                 except Exception as e:
@@ -483,63 +491,70 @@ class WinetricksHandler:
                 self.logger.error(f"Failed to install {component} after {max_attempts} attempts")
                 return False
 
-        self.logger.info("✓ All components installed successfully using separate sessions")
+        self.logger.info("All components installed successfully using separate sessions")
         # Set Windows 10 mode after all component installation (matches legacy script timing)
         self._set_windows_10_mode(wineprefix, env.get('WINE', ''))
         return True
 
-    def _install_components_hybrid_approach(self, components: list, wineprefix: str, game_var: str) -> bool:
+    def _install_components_hybrid_approach(self, components: list, wineprefix: str, game_var: str, use_winetricks: bool = True) -> bool:
         """
-        Hybrid approach: Install dotnet40 with protontricks (known to work),
-        then install remaining components with winetricks (faster for other components).
+        Hybrid approach: Install legacy .NET Framework versions with protontricks (reliable),
+        then install remaining components with winetricks OR protontricks based on user preference.
 
         Args:
             components: List of all components to install
             wineprefix: Wine prefix path
             game_var: Game variable for AppID detection
+            use_winetricks: Whether to use winetricks for non-legacy components
 
         Returns:
             bool: True if all installations succeeded, False otherwise
         """
         self.logger.info("Starting hybrid installation approach")
 
-        # Separate dotnet40 (protontricks) from other components (winetricks)
-        protontricks_components = [comp for comp in components if comp == "dotnet40"]
-        other_components = [comp for comp in components if comp != "dotnet40"]
+        # Legacy .NET Framework versions that need protontricks
+        legacy_dotnet_versions = ['dotnet40', 'dotnet472', 'dotnet48']
+
+        # Separate legacy .NET (protontricks) from other components (winetricks)
+        protontricks_components = [comp for comp in components if comp in legacy_dotnet_versions]
+        other_components = [comp for comp in components if comp not in legacy_dotnet_versions]
 
         self.logger.info(f"Protontricks components: {protontricks_components}")
         self.logger.info(f"Other components: {other_components}")
 
-        # Step 1: Install dotnet40 with protontricks if present
+        # Step 1: Install legacy .NET Framework versions with protontricks if present
         if protontricks_components:
-            self.logger.info(f"Installing {protontricks_components} using protontricks...")
-            if not self._install_dotnet40_with_protontricks(wineprefix, game_var):
+            self.logger.info(f"Installing legacy .NET versions {protontricks_components} using protontricks...")
+            if not self._install_legacy_dotnet_with_protontricks(protontricks_components, wineprefix, game_var):
                 self.logger.error(f"Failed to install {protontricks_components} with protontricks")
                 return False
-            self.logger.info(f"✓ {protontricks_components} installation completed successfully with protontricks")
+            self.logger.info(f"{protontricks_components} installation completed successfully with protontricks")
 
-        # Step 2: Install remaining components with winetricks if any
+        # Step 2: Install remaining components if any
         if other_components:
-            self.logger.info(f"Installing remaining components with winetricks: {other_components}")
+            if use_winetricks:
+                self.logger.info(f"Installing remaining components with winetricks: {other_components}")
+                # Use existing winetricks logic for other components
+                env = self._prepare_winetricks_environment(wineprefix)
+                if not env:
+                    return False
+                return self._install_components_with_winetricks(other_components, wineprefix, env)
+            else:
+                self.logger.info(f"Installing remaining components with protontricks: {other_components}")
+                return self._install_components_protontricks_only(other_components, wineprefix, game_var)
 
-            # Use existing winetricks logic for other components
-            env = self._prepare_winetricks_environment(wineprefix)
-            if not env:
-                return False
-
-            return self._install_components_with_winetricks(other_components, wineprefix, env)
-
-        self.logger.info("✓ Hybrid component installation completed successfully")
+        self.logger.info("Hybrid component installation completed successfully")
         # Set Windows 10 mode after all component installation (matches legacy script timing)
         wine_binary = self._get_wine_binary_for_prefix(wineprefix)
         self._set_windows_10_mode(wineprefix, wine_binary)
         return True
 
-    def _install_dotnet40_with_protontricks(self, wineprefix: str, game_var: str) -> bool:
+    def _install_legacy_dotnet_with_protontricks(self, legacy_components: list, wineprefix: str, game_var: str) -> bool:
         """
-        Install dotnet40 using protontricks (known to work reliably).
+        Install legacy .NET Framework versions using protontricks (known to work more reliably).
 
         Args:
+            legacy_components: List of legacy .NET components to install (dotnet40, dotnet472, dotnet48)
             wineprefix: Wine prefix path
             game_var: Game variable for AppID detection
 
@@ -575,21 +590,28 @@ class WinetricksHandler:
 
             # Detect protontricks availability
             if not protontricks_handler.detect_protontricks():
-                self.logger.error("Protontricks not available for dotnet40 installation")
+                self.logger.error(f"Protontricks not available for legacy .NET installation: {legacy_components}")
                 return False
 
-            # Install dotnet40 using protontricks
-            success = protontricks_handler.install_wine_components(appid, game_var, ["dotnet40"])
+            # Install legacy .NET components using protontricks
+            success = protontricks_handler.install_wine_components(appid, game_var, legacy_components)
 
             if success:
-                self.logger.info("✓ dotnet40 installed successfully with protontricks")
+                self.logger.info(f"Legacy .NET components {legacy_components} installed successfully with protontricks")
+
+                # Enable dotfiles and symlinks for the prefix
+                if protontricks_handler.enable_dotfiles(appid):
+                    self.logger.info("Enabled dotfiles and symlinks support")
+                else:
+                    self.logger.warning("Failed to enable dotfiles/symlinks (non-critical)")
+
                 return True
             else:
-                self.logger.error("✗ dotnet40 installation failed with protontricks")
+                self.logger.error(f"Legacy .NET components {legacy_components} installation failed with protontricks")
                 return False
 
         except Exception as e:
-            self.logger.error(f"Error installing dotnet40 with protontricks: {e}", exc_info=True)
+            self.logger.error(f"Error installing legacy .NET components {legacy_components} with protontricks: {e}", exc_info=True)
             return False
 
     def _prepare_winetricks_environment(self, wineprefix: str) -> Optional[dict]:
@@ -699,13 +721,13 @@ class WinetricksHandler:
                 )
 
                 if result.returncode == 0:
-                    self.logger.info(f"✓ Winetricks components installed successfully: {components}")
+                    self.logger.info(f"Winetricks components installed successfully: {components}")
                     # Set Windows 10 mode after component installation (matches legacy script timing)
                     wine_binary = env.get('WINE', '')
                     self._set_windows_10_mode(env.get('WINEPREFIX', ''), wine_binary)
                     return True
                 else:
-                    self.logger.error(f"✗ Winetricks failed (attempt {attempt}): {result.stderr.strip()}")
+                    self.logger.error(f"Winetricks failed (attempt {attempt}): {result.stderr.strip()}")
 
             except Exception as e:
                 self.logger.error(f"Error during winetricks run (attempt {attempt}): {e}")
@@ -729,7 +751,7 @@ class WinetricksHandler:
             ], env=env, capture_output=True, text=True, timeout=300)
 
             if result.returncode == 0:
-                self.logger.info("✓ Windows 10 mode set successfully")
+                self.logger.info("Windows 10 mode set successfully")
             else:
                 self.logger.warning(f"Could not set Windows 10 mode: {result.stderr}")
 
@@ -768,13 +790,13 @@ class WinetricksHandler:
             success = protontricks_handler.install_wine_components(appid, game_var, components)
 
             if success:
-                self.logger.info("✓ All components installed successfully with protontricks")
+                self.logger.info("All components installed successfully with protontricks")
                 # Set Windows 10 mode after component installation
                 wine_binary = self._get_wine_binary_for_prefix(wineprefix)
                 self._set_windows_10_mode(wineprefix, wine_binary)
                 return True
             else:
-                self.logger.error("✗ Component installation failed with protontricks")
+                self.logger.error("Component installation failed with protontricks")
                 return False
 
         except Exception as e:

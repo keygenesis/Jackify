@@ -80,7 +80,7 @@ class ModlistHandler:
         "lsiv": ["dotnet40"],
         "ls4": ["dotnet40"],
         "lorerim": ["dotnet40"],
-        "lostlegacy": ["dotnet48"],
+        "lostlegacy": ["dotnet40"],
     }
     
     def __init__(self, steam_path_or_config: Union[Dict, str, Path, None] = None, 
@@ -737,6 +737,14 @@ class ModlistHandler:
         self.logger.info(f"ModOrganizer.ini backed up to: {backup_path}")
         self.logger.info("Step 6: Backing up ModOrganizer.ini... Done")
 
+        # Step 6.5: Handle symlinked downloads directory
+        if status_callback:
+            status_callback(f"{self._get_progress_timestamp()} Checking for symlinked downloads directory")
+        self.logger.info("Step 6.5: Checking for symlinked downloads directory...")
+        if not self._handle_symlinked_downloads():
+            self.logger.warning("Warning during symlink handling (non-critical)")
+        self.logger.info("Step 6.5: Checking for symlinked downloads directory... Done")
+
         # Step 7a: Detect Stock Game/Game Root path
         if status_callback:
             status_callback(f"{self._get_progress_timestamp()} Detecting stock game path")
@@ -1346,19 +1354,111 @@ class ModlistHandler:
                 self.logger.warning("Cannot re-enforce Windows 10 mode - prefix path not found")
                 return
 
-            # Get wine binary path
-            wine_binary = PathHandler.get_wine_binary_for_appid(str(self.appid))
+            # Use winetricks handler to set Windows 10 mode
+            winetricks_handler = WinetricksHandler()
+            wine_binary = winetricks_handler._get_wine_binary_for_prefix(str(prefix_path))
             if not wine_binary:
                 self.logger.warning("Cannot re-enforce Windows 10 mode - wine binary not found")
                 return
 
-            # Use winetricks handler to set Windows 10 mode
-            winetricks_handler = WinetricksHandler()
             winetricks_handler._set_windows_10_mode(str(prefix_path), wine_binary)
 
-            self.logger.info("✓ Windows 10 mode re-enforced after modlist-specific configurations")
+            self.logger.info("Windows 10 mode re-enforced after modlist-specific configurations")
 
         except Exception as e:
             self.logger.warning(f"Error re-enforcing Windows 10 mode: {e}")
+
+    def _handle_symlinked_downloads(self) -> bool:
+        """
+        Check if downloads_directory in ModOrganizer.ini points to a symlink.
+        If it does, comment out the line to force MO2 to use default behavior.
+
+        Returns:
+            bool: True on success or no action needed, False on error
+        """
+        try:
+            import configparser
+            import os
+
+            if not self.modlist_ini or not os.path.exists(self.modlist_ini):
+                self.logger.warning("ModOrganizer.ini not found for symlink check")
+                return True  # Non-critical
+
+            # Read the INI file
+            config = configparser.ConfigParser(allow_no_value=True, delimiters=['='])
+            config.optionxform = str  # Preserve case sensitivity
+
+            try:
+                # Read file manually to handle BOM
+                with open(self.modlist_ini, 'r', encoding='utf-8-sig') as f:
+                    config.read_file(f)
+            except UnicodeDecodeError:
+                with open(self.modlist_ini, 'r', encoding='latin-1') as f:
+                    config.read_file(f)
+
+            # Check if downloads_directory or download_directory exists and is a symlink
+            downloads_key = None
+            downloads_path = None
+
+            if 'General' in config:
+                # Check for both possible key names
+                if 'downloads_directory' in config['General']:
+                    downloads_key = 'downloads_directory'
+                    downloads_path = config['General']['downloads_directory']
+                elif 'download_directory' in config['General']:
+                    downloads_key = 'download_directory'
+                    downloads_path = config['General']['download_directory']
+
+            if downloads_path:
+
+                if downloads_path and os.path.exists(downloads_path):
+                    # Check if the path or any parent directory contains symlinks
+                    def has_symlink_in_path(path):
+                        """Check if path or any parent directory is a symlink"""
+                        current_path = Path(path).resolve()
+                        check_path = Path(path)
+
+                        # Walk up the path checking each component
+                        for parent in [check_path] + list(check_path.parents):
+                            if parent.is_symlink():
+                                return True, str(parent)
+                        return False, None
+
+                    has_symlink, symlink_path = has_symlink_in_path(downloads_path)
+                    if has_symlink:
+                        self.logger.info(f"Detected symlink in downloads directory path: {symlink_path} -> {downloads_path}")
+                        self.logger.info("Commenting out downloads_directory to avoid Wine symlink issues")
+
+                        # Read the file manually to preserve comments and formatting
+                        with open(self.modlist_ini, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+
+                        # Find and comment out the downloads directory line
+                        modified = False
+                        for i, line in enumerate(lines):
+                            if line.strip().startswith(f'{downloads_key}='):
+                                lines[i] = '#' + line  # Comment out the line
+                                modified = True
+                                break
+
+                        if modified:
+                            # Write the modified file back
+                            with open(self.modlist_ini, 'w', encoding='utf-8') as f:
+                                f.writelines(lines)
+                            self.logger.info(f"{downloads_key} line commented out successfully")
+                        else:
+                            self.logger.warning("downloads_directory line not found in file")
+                    else:
+                        self.logger.debug(f"downloads_directory is not a symlink: {downloads_path}")
+                else:
+                    self.logger.debug("downloads_directory path does not exist or is empty")
+            else:
+                self.logger.debug("No downloads_directory found in ModOrganizer.ini")
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error handling symlinked downloads: {e}", exc_info=True)
+            return False
 
 # (Ensure EOF is clean and no extra incorrect methods exist below) 

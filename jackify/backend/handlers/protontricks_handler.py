@@ -488,7 +488,7 @@ class ProtontricksHandler:
                         if "ShowDotFiles" not in content:
                             logger.debug(f"Adding ShowDotFiles entry to {user_reg_path}")
                             with open(user_reg_path, 'a', encoding='utf-8') as f:
-                                f.write('\n[Software\\Wine] 1603891765\n') 
+                                f.write('\n[Software\\Wine] 1603891765\n')
                                 f.write('"ShowDotFiles"="Y"\n')
                             dotfiles_set_success = True # Count file write as success too
                         else:
@@ -497,7 +497,7 @@ class ProtontricksHandler:
                     else:
                         logger.warning(f"user.reg not found at {user_reg_path}, creating it.")
                         with open(user_reg_path, 'w', encoding='utf-8') as f:
-                             f.write('[Software\\Wine] 1603891765\n') 
+                             f.write('[Software\\Wine] 1603891765\n')
                              f.write('"ShowDotFiles"="Y"\n')
                         dotfiles_set_success = True # Creating file counts as success
                 except Exception as e:

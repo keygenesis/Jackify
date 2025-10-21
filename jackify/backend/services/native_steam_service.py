@@ -382,8 +382,27 @@ class NativeSteamService:
             # Find the CompatToolMapping section
             compat_start = config_text.find('"CompatToolMapping"')
             if compat_start == -1:
-                logger.error("CompatToolMapping section not found in config.vdf")
-                return False
+                logger.warning("CompatToolMapping section not found in config.vdf, creating it")
+                # Find the Steam section to add CompatToolMapping to
+                steam_section = config_text.find('"Steam"')
+                if steam_section == -1:
+                    logger.error("Steam section not found in config.vdf")
+                    return False
+
+                # Find the opening brace for Steam section
+                steam_brace = config_text.find('{', steam_section)
+                if steam_brace == -1:
+                    logger.error("Steam section opening brace not found")
+                    return False
+
+                # Insert CompatToolMapping section right after Steam opening brace
+                insert_pos = steam_brace + 1
+                compat_section = '\n\t\t"CompatToolMapping"\n\t\t{\n\t\t}\n'
+                config_text = config_text[:insert_pos] + compat_section + config_text[insert_pos:]
+
+                # Update compat_start position after insertion
+                compat_start = config_text.find('"CompatToolMapping"')
+                logger.info("Created CompatToolMapping section in config.vdf")
             
             # Find the closing brace for CompatToolMapping
             # Look for the opening brace after CompatToolMapping

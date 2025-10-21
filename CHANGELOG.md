@@ -1,28 +1,47 @@
 # Jackify Changelog
 
-## v0.1.6 - Advanced Proton Management & Lorerim Support
+## v0.1.6.1 - Critical Configuration and Legacy .NET Fixes
+**Release Date:** October 21, 2025
+
+### Bug Fixes
+- **Fixed FILFY Configuration Error**: Resolved "set_modlist failed" error in Configure New Modlist workflow
+  - Added missing `appid` field to configuration context in `configure_modlist` method
+  - Affects edge case where users configure modlists via specific GUI workflows
+  - Ensures consistent context handling across all configuration paths
+
+- **Fixed Steam CompatToolMapping Creation**: Resolved Proton version setting failures on fresh Steam installations
+  - Native Steam service now creates missing CompatToolMapping section automatically
+  - Prevents "CompatToolMapping section not found" errors during shortcut creation
+  - Ensures consistent Proton configuration across all Steam setups
+
+- **Fixed Lost Legacy .NET Requirements**: Corrected dotnet48 installation failures
+  - Changed Lost Legacy requirement from dotnet48 to dotnet40 (which actually works)
+  - Added Lost Legacy Proton 9 override for ENB compatibility
+  - Resolves widespread .NET Framework installation failures
+
+- **Added Automatic Symlink Handling**: Wine symlink compatibility improvements
+  - Automatically detects symlinked downloads_directory in ModOrganizer.ini
+  - Comments out symlinked paths to avoid Wine symlink following issues
+  - Enables MO2 to use default download location instead of broken symlink paths
+
+- **Enhanced Dotfiles and Symlinks Support**: Automatic Wine prefix configuration
+  - Automatically enables ShowDotFiles and symlink support during .NET component installation
+  - Improves compatibility with various file system configurations
+  - Applied to all modlists using legacy .NET components
+
+### Code Quality
+- **Removed Unprofessional Elements**: Cleaned up all emoji usage in logs and user output
+  - Maintains professional appearance in all user-facing messages
+  - Follows established coding standards
+
+---
+
+## v0.1.6 - Lorerim Proton Support
 **Release Date:** October 16, 2025
 
-### Major New Features
-- **Dual Proton Configuration**: Separate Install Proton and Game Proton version selection in Settings
-  - **Install Proton**: Optimized for modlist installation and texture processing (Experimental/GE-Proton 10+ recommended for performance)
-  - **Game Proton**: For game shortcuts (supports any Proton 9+ version)
-  - Independent configuration allows users to optimize for both installation speed and game compatibility
-
-- **Lorerim Proton Override**: Automatic Proton 9 selection for Lorerim modlist installations
-  - Priority system: GE-Proton9-27 → Other GE-Proton 9 versions → Valve Proton 9 → user settings fallback
-  - User notification when override is applied
-  - Case-insensitive detection for Lorerim modlists
-
-- **Configurable Component Installation Method**: User-selectable toggle in Settings
-  - **Optimized Mode** (default): Protontricks for dotnet40 (reliable), winetricks for other components (fast)
-  - **Legacy Mode**: Protontricks for all components (slower but maximum compatibility)
-
-### Engine & Technical Improvements
-- **jackify-engine v0.3.17**: Latest engine version with performance improvements
-- **Windows 10 Prefix Timing**: Improved timing to match legacy script behavior
-- **Self-Updater Enhancement**: Fixed auto-restart checkbox functionality
-- **ProtontricksHandler**: Updated constructor calls across codebase for consistency
+### New Features
+- **Lorerim Proton Override**: Automatically selects Proton 9 for Lorerim installations (GE-Proton9-27 preferred)
+- **Engine Update**: jackify-engine v0.3.17
 
 ---
 

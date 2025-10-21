@@ -629,7 +629,8 @@ class ModlistService:
                 'mo2_exe_path': str(context.install_dir / 'ModOrganizer.exe'),
                 'resolution': getattr(context, 'resolution', None),
                 'skip_confirmation': True,  # Service layer should be non-interactive
-                'manual_steps_completed': False
+                'manual_steps_completed': False,
+                'appid': getattr(context, 'app_id', None)  # Fix: Include appid like other configuration paths
             }
 
             # DEBUG: Log what resolution we're passing

@@ -447,7 +447,7 @@ class SettingsDialog(QDialog):
         self.use_winetricks_checkbox = QCheckBox("Use winetricks for component installation (faster)")
         self.use_winetricks_checkbox.setChecked(self.config_handler.get('use_winetricks_for_components', True))
         self.use_winetricks_checkbox.setToolTip(
-            "When enabled: Uses winetricks for most components (faster) and protontricks only for dotnet40 (more reliable).\n"
+            "When enabled: Uses winetricks for most components (faster) and protontricks for legacy .NET versions (dotnet40, dotnet472, dotnet48) which are more reliable.\n"
             "When disabled: Uses protontricks for all components (legacy behavior, slower but more compatible)."
         )
         component_layout.addWidget(self.use_winetricks_checkbox)
