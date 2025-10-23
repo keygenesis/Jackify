@@ -1,5 +1,15 @@
 # Jackify Changelog
 
+## v0.1.6.3 - Emergency Hotfix
+**Release Date:** October 23, 2025
+
+### Critical Bug Fixes
+- **FIXED: Proton Detection for Custom Steam Libraries**: Now properly reads all Steam libraries from libraryfolders.vdf
+- **IMPROVED: Registry Wine Binary Detection**: Uses user's configured Proton for better compatibility
+- **IMPROVED: Error Handling**: Registry fixes now provide clear warnings if they fail instead of breaking entire workflow
+
+---
+
 ## v0.1.6.2 - Minor Bug Fixes
 **Release Date:** October 23, 2025
 

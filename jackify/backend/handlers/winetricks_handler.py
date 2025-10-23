@@ -169,9 +169,18 @@ class WinetricksHandler:
                 if best_proton:
                     wine_binary = WineUtils.find_proton_binary(best_proton['name'])
                     self.logger.info(f"Auto-selected Proton: {best_proton['name']} at {best_proton['path']}")
+                else:
+                    # Enhanced debugging for Proton detection failure
+                    self.logger.error("Auto-detection failed - no Proton versions found")
+                    available_versions = WineUtils.scan_all_proton_versions()
+                    if available_versions:
+                        self.logger.error(f"Available Proton versions: {[v['name'] for v in available_versions]}")
+                    else:
+                        self.logger.error("No Proton versions detected in standard Steam locations")
 
             if not wine_binary:
                 self.logger.error("Cannot run winetricks: No compatible Proton version found")
+                self.logger.error("Please ensure you have Proton 9+ or GE-Proton installed through Steam")
                 return False
 
             if not (os.path.exists(wine_binary) and os.access(wine_binary, os.X_OK)):

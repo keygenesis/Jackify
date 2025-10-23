@@ -676,7 +676,20 @@ class ModlistHandler:
         if status_callback:
             status_callback(f"{self._get_progress_timestamp()} Applying universal dotnet4.x compatibility fixes")
         self.logger.info("Step 3.5: Applying universal dotnet4.x compatibility registry fixes...")
-        self._apply_universal_dotnet_fixes()
+        registry_success = False
+        try:
+            registry_success = self._apply_universal_dotnet_fixes()
+        except Exception as e:
+            self.logger.error(f"CRITICAL: Registry fixes failed - modlist may have .NET compatibility issues: {e}")
+            registry_success = False
+
+        if not registry_success:
+            self.logger.error("=" * 80)
+            self.logger.error("WARNING: Universal dotnet4.x registry fixes FAILED!")
+            self.logger.error("This modlist may experience .NET Framework compatibility issues.")
+            self.logger.error("Consider manually setting mscoree=native in winecfg if problems occur.")
+            self.logger.error("=" * 80)
+            # Continue but user should be aware of potential issues
 
         # Step 4: Install Wine Components
         if status_callback:
@@ -1551,35 +1564,41 @@ class ModlistHandler:
             return False
 
     def _find_wine_binary_for_registry(self) -> Optional[str]:
-        """Find the appropriate Wine binary for registry operations"""
+        """Find the appropriate Wine binary for registry operations using user's configured Proton"""
         try:
-            # Method 1: Try to detect from Steam's config or use Proton from compat data
-            # Look for wine binary in common Proton locations
-            proton_paths = [
-                os.path.expanduser("~/.local/share/Steam/compatibilitytools.d"),
-                os.path.expanduser("~/.steam/steam/steamapps/common")
-            ]
+            # Use the user's configured Proton version from settings
+            from ..handlers.config_handler import ConfigHandler
+            config_handler = ConfigHandler()
+            user_proton_path = config_handler.get_game_proton_path()
 
-            for base_path in proton_paths:
-                if os.path.exists(base_path):
-                    for item in os.listdir(base_path):
-                        if 'proton' in item.lower():
-                            wine_path = os.path.join(base_path, item, 'files', 'bin', 'wine')
-                            if os.path.exists(wine_path):
-                                self.logger.debug(f"Found Wine binary: {wine_path}")
-                                return wine_path
+            if user_proton_path and user_proton_path != 'auto':
+                # User has selected a specific Proton version
+                proton_path = Path(user_proton_path).expanduser()
 
-            # Method 2: Fallback to system wine if available
-            try:
-                result = subprocess.run(['which', 'wine'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    wine_path = result.stdout.strip()
-                    self.logger.debug(f"Using system Wine binary: {wine_path}")
-                    return wine_path
-            except Exception:
-                pass
+                # Check for wine binary in both GE-Proton and Valve Proton structures
+                wine_candidates = [
+                    proton_path / "files" / "bin" / "wine",  # GE-Proton structure
+                    proton_path / "dist" / "bin" / "wine"    # Valve Proton structure
+                ]
 
-            self.logger.error("No suitable Wine binary found for registry operations")
+                for wine_path in wine_candidates:
+                    if wine_path.exists():
+                        self.logger.info(f"Using Wine binary from user's configured Proton: {wine_path}")
+                        return str(wine_path)
+
+                self.logger.warning(f"User's configured Proton path has no wine binary: {user_proton_path}")
+
+            # Fallback: Try to use same Steam library detection as main Proton detection
+            from ..handlers.wine_utils import WineUtils
+            best_proton = WineUtils.select_best_proton()
+            if best_proton:
+                wine_binary = WineUtils.find_proton_binary(best_proton['name'])
+                if wine_binary:
+                    self.logger.info(f"Using Wine binary from detected Proton: {wine_binary}")
+                    return wine_binary
+
+            # NEVER fall back to system wine - it will break Proton prefixes with architecture mismatches
+            self.logger.error("No suitable Proton Wine binary found for registry operations")
             return None
 
         except Exception as e:

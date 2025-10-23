@@ -777,27 +777,40 @@ class WineUtils:
         Returns:
             List of Path objects for Steam library directories
         """
+        steam_common_paths = []
+
         try:
             from .path_handler import PathHandler
             # Use existing PathHandler that reads libraryfolders.vdf
             library_paths = PathHandler.get_all_steam_library_paths()
+            logger.info(f"PathHandler found Steam libraries: {library_paths}")
+
             # Convert to steamapps/common paths for Proton scanning
-            steam_common_paths = []
             for lib_path in library_paths:
                 common_path = lib_path / "steamapps" / "common"
                 if common_path.exists():
                     steam_common_paths.append(common_path)
-            logger.debug(f"Found Steam library paths: {steam_common_paths}")
-            return steam_common_paths
+                    logger.debug(f"Added Steam library: {common_path}")
+                else:
+                    logger.debug(f"Steam library path doesn't exist: {common_path}")
+
         except Exception as e:
-            logger.warning(f"Failed to get Steam library paths from libraryfolders.vdf: {e}")
-            # Fallback to hardcoded paths if PathHandler fails
-            fallback_paths = [
-                Path.home() / ".steam/steam/steamapps/common",
-                Path.home() / ".local/share/Steam/steamapps/common",
-                Path.home() / ".steam/root/steamapps/common"
-            ]
-            return [path for path in fallback_paths if path.exists()]
+            logger.error(f"PathHandler failed to read libraryfolders.vdf: {e}")
+
+        # Always add fallback paths in case PathHandler missed something
+        fallback_paths = [
+            Path.home() / ".steam/steam/steamapps/common",
+            Path.home() / ".local/share/Steam/steamapps/common",
+            Path.home() / ".steam/root/steamapps/common"
+        ]
+
+        for fallback_path in fallback_paths:
+            if fallback_path.exists() and fallback_path not in steam_common_paths:
+                steam_common_paths.append(fallback_path)
+                logger.debug(f"Added fallback Steam library: {fallback_path}")
+
+        logger.info(f"Final Steam library paths for Proton scanning: {steam_common_paths}")
+        return steam_common_paths
 
     @staticmethod
     def get_compatibility_tool_paths() -> List[Path]:
