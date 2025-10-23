@@ -263,13 +263,15 @@ class WinetricksHandler:
         use_winetricks = config_handler.get('use_winetricks_for_components', True)
 
         # Legacy .NET Framework versions that are problematic in Wine/Proton
-        legacy_dotnet_versions = ['dotnet40', 'dotnet472', 'dotnet48']
+        # DISABLED in v0.1.6.2: Universal registry fixes replace dotnet4.x installation
+        # legacy_dotnet_versions = ['dotnet40', 'dotnet472', 'dotnet48']
+        legacy_dotnet_versions = []  # ALL dotnet4.x versions disabled - universal registry fixes handle compatibility
 
         # Check if any legacy .NET Framework versions are present
         has_legacy_dotnet = any(comp in components_to_install for comp in legacy_dotnet_versions)
 
         # Choose installation method based on user preference and components
-        # ALWAYS use hybrid approach when legacy .NET Framework versions are present
+        # HYBRID APPROACH MOSTLY DISABLED: dotnet40/dotnet472 replaced with universal registry fixes
         if has_legacy_dotnet:
             legacy_found = [comp for comp in legacy_dotnet_versions if comp in components_to_install]
             self.logger.info(f"Using hybrid approach: protontricks for legacy .NET versions {legacy_found} (reliable), {'winetricks' if use_winetricks else 'protontricks'} for other components")

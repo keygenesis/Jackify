@@ -71,16 +71,19 @@ class ModlistHandler:
     }
     
     # Canonical mapping of modlist-specific Wine components (from omni-guides.sh)
+    # NOTE: dotnet4.x components disabled in v0.1.6.2 - replaced with universal registry fixes
     MODLIST_WINE_COMPONENTS = {
-        "wildlander": ["dotnet472"],
-        "librum": ["dotnet40", "dotnet8"],
-        "apostasy": ["dotnet40", "dotnet8"],
-        "nordicsouls": ["dotnet40"],
-        "livingskyrim": ["dotnet40"],
-        "lsiv": ["dotnet40"],
-        "ls4": ["dotnet40"],
-        "lorerim": ["dotnet40"],
-        "lostlegacy": ["dotnet40"],
+        # "wildlander": ["dotnet472"],  # DISABLED: Universal registry fixes replace dotnet472 installation
+        # "librum": ["dotnet40", "dotnet8"],  # PARTIAL DISABLE: Keep dotnet8, remove dotnet40
+        "librum": ["dotnet8"],  # dotnet40 replaced with universal registry fixes
+        # "apostasy": ["dotnet40", "dotnet8"],  # PARTIAL DISABLE: Keep dotnet8, remove dotnet40
+        "apostasy": ["dotnet8"],  # dotnet40 replaced with universal registry fixes
+        # "nordicsouls": ["dotnet40"],  # DISABLED: Universal registry fixes replace dotnet40 installation
+        # "livingskyrim": ["dotnet40"],  # DISABLED: Universal registry fixes replace dotnet40 installation
+        # "lsiv": ["dotnet40"],  # DISABLED: Universal registry fixes replace dotnet40 installation
+        # "ls4": ["dotnet40"],  # DISABLED: Universal registry fixes replace dotnet40 installation
+        # "lorerim": ["dotnet40"],  # DISABLED: Universal registry fixes replace dotnet40 installation
+        # "lostlegacy": ["dotnet40"],  # DISABLED: Universal registry fixes replace dotnet40 installation
     }
     
     def __init__(self, steam_path_or_config: Union[Dict, str, Path, None] = None, 
@@ -669,6 +672,12 @@ class ModlistHandler:
             return False
         self.logger.info("Step 3: Curated user.reg.modlist and system.reg.modlist applied successfully.")
 
+        # Step 3.5: Apply universal dotnet4.x compatibility registry fixes
+        if status_callback:
+            status_callback(f"{self._get_progress_timestamp()} Applying universal dotnet4.x compatibility fixes")
+        self.logger.info("Step 3.5: Applying universal dotnet4.x compatibility registry fixes...")
+        self._apply_universal_dotnet_fixes()
+
         # Step 4: Install Wine Components
         if status_callback:
             status_callback(f"{self._get_progress_timestamp()} Installing Wine components (this may take a while)")
@@ -871,21 +880,38 @@ class ModlistHandler:
                 print("Warning: Failed to create dxvk.conf file.")
             self.logger.info("Step 10: Creating dxvk.conf... Done")
 
-        # Step 11a: Small Tasks - Delete Plugin
+        # Step 11a: Small Tasks - Delete Incompatible Plugins
         if status_callback:
-            status_callback(f"{self._get_progress_timestamp()} Deleting incompatible MO2 plugin")
-        self.logger.info("Step 11a: Deleting incompatible MO2 plugin (FixGameRegKey.py)...")
-        plugin_path = Path(self.modlist_dir) / "plugins" / "FixGameRegKey.py"
-        if plugin_path.exists():
+            status_callback(f"{self._get_progress_timestamp()} Deleting incompatible MO2 plugins")
+        self.logger.info("Step 11a: Deleting incompatible MO2 plugins...")
+
+        # Delete FixGameRegKey.py plugin
+        fixgamereg_path = Path(self.modlist_dir) / "plugins" / "FixGameRegKey.py"
+        if fixgamereg_path.exists():
             try:
-                plugin_path.unlink()
+                fixgamereg_path.unlink()
                 self.logger.info("FixGameRegKey.py plugin deleted successfully.")
             except Exception as e:
                 self.logger.warning(f"Failed to delete FixGameRegKey.py plugin: {e}")
-                print("Warning: Failed to delete incompatible plugin file.")
+                print("Warning: Failed to delete FixGameRegKey.py plugin file.")
         else:
             self.logger.debug("FixGameRegKey.py plugin not found (this is normal).")
-        self.logger.info("Step 11a: Plugin deletion check complete.")
+
+        # Delete PageFileManager plugin directory (Linux has no PageFile)
+        pagefilemgr_path = Path(self.modlist_dir) / "plugins" / "PageFileManager"
+        if pagefilemgr_path.exists():
+            try:
+                import shutil
+                shutil.rmtree(pagefilemgr_path)
+                self.logger.info("PageFileManager plugin directory deleted successfully.")
+            except Exception as e:
+                self.logger.warning(f"Failed to delete PageFileManager plugin directory: {e}")
+                print("Warning: Failed to delete PageFileManager plugin directory.")
+        else:
+            self.logger.debug("PageFileManager plugin not found (this is normal).")
+
+        self.logger.info("Step 11a: Incompatible plugin deletion check complete.")
+
 
         # Step 11b: Download Font
         if status_callback:
@@ -1461,4 +1487,103 @@ class ModlistHandler:
             self.logger.error(f"Error handling symlinked downloads: {e}", exc_info=True)
             return False
 
-# (Ensure EOF is clean and no extra incorrect methods exist below) 
+    def _apply_universal_dotnet_fixes(self):
+        """Apply universal dotnet4.x compatibility registry fixes to ALL modlists"""
+        try:
+            prefix_path = os.path.join(str(self.compat_data_path), "pfx")
+            if not os.path.exists(prefix_path):
+                self.logger.warning(f"Prefix path not found: {prefix_path}")
+                return False
+
+            self.logger.info("Applying universal dotnet4.x compatibility registry fixes...")
+
+            # Find the appropriate Wine binary to use for registry operations
+            wine_binary = self._find_wine_binary_for_registry()
+            if not wine_binary:
+                self.logger.error("Could not find Wine binary for registry operations")
+                return False
+
+            # Set environment for Wine registry operations
+            env = os.environ.copy()
+            env['WINEPREFIX'] = prefix_path
+            env['WINEDEBUG'] = '-all'  # Suppress Wine debug output
+
+            # Registry fix 1: Set mscoree=native DLL override
+            # This tells Wine to use native .NET runtime instead of Wine's implementation
+            self.logger.debug("Setting mscoree=native DLL override...")
+            cmd1 = [
+                wine_binary, 'reg', 'add',
+                'HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides',
+                '/v', 'mscoree', '/t', 'REG_SZ', '/d', 'native', '/f'
+            ]
+
+            result1 = subprocess.run(cmd1, env=env, capture_output=True, text=True)
+            if result1.returncode == 0:
+                self.logger.info("Successfully applied mscoree=native DLL override")
+            else:
+                self.logger.warning(f"Failed to set mscoree DLL override: {result1.stderr}")
+
+            # Registry fix 2: Set OnlyUseLatestCLR=1
+            # This prevents .NET version conflicts by using the latest CLR
+            self.logger.debug("Setting OnlyUseLatestCLR=1 registry entry...")
+            cmd2 = [
+                wine_binary, 'reg', 'add',
+                'HKEY_LOCAL_MACHINE\\Software\\Microsoft\\.NETFramework',
+                '/v', 'OnlyUseLatestCLR', '/t', 'REG_DWORD', '/d', '1', '/f'
+            ]
+
+            result2 = subprocess.run(cmd2, env=env, capture_output=True, text=True)
+            if result2.returncode == 0:
+                self.logger.info("Successfully applied OnlyUseLatestCLR=1 registry entry")
+            else:
+                self.logger.warning(f"Failed to set OnlyUseLatestCLR: {result2.stderr}")
+
+            # Both fixes applied - this should eliminate dotnet4.x installation requirements
+            if result1.returncode == 0 and result2.returncode == 0:
+                self.logger.info("Universal dotnet4.x compatibility fixes applied successfully")
+                return True
+            else:
+                self.logger.warning("Some dotnet4.x registry fixes failed, but continuing...")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to apply universal dotnet4.x fixes: {e}")
+            return False
+
+    def _find_wine_binary_for_registry(self) -> Optional[str]:
+        """Find the appropriate Wine binary for registry operations"""
+        try:
+            # Method 1: Try to detect from Steam's config or use Proton from compat data
+            # Look for wine binary in common Proton locations
+            proton_paths = [
+                os.path.expanduser("~/.local/share/Steam/compatibilitytools.d"),
+                os.path.expanduser("~/.steam/steam/steamapps/common")
+            ]
+
+            for base_path in proton_paths:
+                if os.path.exists(base_path):
+                    for item in os.listdir(base_path):
+                        if 'proton' in item.lower():
+                            wine_path = os.path.join(base_path, item, 'files', 'bin', 'wine')
+                            if os.path.exists(wine_path):
+                                self.logger.debug(f"Found Wine binary: {wine_path}")
+                                return wine_path
+
+            # Method 2: Fallback to system wine if available
+            try:
+                result = subprocess.run(['which', 'wine'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    wine_path = result.stdout.strip()
+                    self.logger.debug(f"Using system Wine binary: {wine_path}")
+                    return wine_path
+            except Exception:
+                pass
+
+            self.logger.error("No suitable Wine binary found for registry operations")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error finding Wine binary: {e}")
+            return None
+
+ 

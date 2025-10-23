@@ -50,7 +50,8 @@ class AutomatedPrefixService:
             from jackify.backend.handlers.wine_utils import WineUtils
 
             # Check for Lorerim-specific Proton override first
-            if modlist_name and modlist_name.lower() == 'lorerim':
+            modlist_normalized = modlist_name.lower().replace(" ", "") if modlist_name else ""
+            if modlist_normalized == 'lorerim':
                 lorerim_proton = self._get_lorerim_preferred_proton()
                 if lorerim_proton:
                     logger.info(f"Lorerim detected: Using {lorerim_proton} instead of user settings")
@@ -58,7 +59,7 @@ class AutomatedPrefixService:
                     return lorerim_proton
 
             # Check for Lost Legacy-specific Proton override (needs Proton 9 for ENB compatibility)
-            if modlist_name and modlist_name.lower() == 'lostlegacy':
+            if modlist_normalized == 'lostlegacy':
                 lostlegacy_proton = self._get_lorerim_preferred_proton()  # Use same logic as Lorerim
                 if lostlegacy_proton:
                     logger.info(f"Lost Legacy detected: Using {lostlegacy_proton} instead of user settings (ENB compatibility)")
@@ -2980,14 +2981,115 @@ echo Prefix creation complete.
             logger.error(f"Failed to update registry path: {e}")
             return False
 
+    def _apply_universal_dotnet_fixes(self, modlist_compatdata_path: str):
+        """Apply universal dotnet4.x compatibility registry fixes to ALL modlists"""
+        try:
+            prefix_path = os.path.join(modlist_compatdata_path, "pfx")
+            if not os.path.exists(prefix_path):
+                logger.warning(f"Prefix path not found: {prefix_path}")
+                return False
+
+            logger.info("Applying universal dotnet4.x compatibility registry fixes...")
+
+            # Find the appropriate Wine binary to use for registry operations
+            wine_binary = self._find_wine_binary_for_registry(modlist_compatdata_path)
+            if not wine_binary:
+                logger.error("Could not find Wine binary for registry operations")
+                return False
+
+            # Set environment for Wine registry operations
+            env = os.environ.copy()
+            env['WINEPREFIX'] = prefix_path
+            env['WINEDEBUG'] = '-all'  # Suppress Wine debug output
+
+            # Registry fix 1: Set mscoree=native DLL override
+            # This tells Wine to use native .NET runtime instead of Wine's implementation
+            logger.debug("Setting mscoree=native DLL override...")
+            cmd1 = [
+                wine_binary, 'reg', 'add',
+                'HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides',
+                '/v', 'mscoree', '/t', 'REG_SZ', '/d', 'native', '/f'
+            ]
+
+            result1 = subprocess.run(cmd1, env=env, capture_output=True, text=True)
+            if result1.returncode == 0:
+                logger.info("Successfully applied mscoree=native DLL override")
+            else:
+                logger.warning(f"Failed to set mscoree DLL override: {result1.stderr}")
+
+            # Registry fix 2: Set OnlyUseLatestCLR=1
+            # This prevents .NET version conflicts by using the latest CLR
+            logger.debug("Setting OnlyUseLatestCLR=1 registry entry...")
+            cmd2 = [
+                wine_binary, 'reg', 'add',
+                'HKEY_LOCAL_MACHINE\\Software\\Microsoft\\.NETFramework',
+                '/v', 'OnlyUseLatestCLR', '/t', 'REG_DWORD', '/d', '1', '/f'
+            ]
+
+            result2 = subprocess.run(cmd2, env=env, capture_output=True, text=True)
+            if result2.returncode == 0:
+                logger.info("Successfully applied OnlyUseLatestCLR=1 registry entry")
+            else:
+                logger.warning(f"Failed to set OnlyUseLatestCLR: {result2.stderr}")
+
+            # Both fixes applied - this should eliminate dotnet4.x installation requirements
+            if result1.returncode == 0 and result2.returncode == 0:
+                logger.info("Universal dotnet4.x compatibility fixes applied successfully")
+                return True
+            else:
+                logger.warning("Some dotnet4.x registry fixes failed, but continuing...")
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to apply universal dotnet4.x fixes: {e}")
+            return False
+
+    def _find_wine_binary_for_registry(self, modlist_compatdata_path: str) -> Optional[str]:
+        """Find the appropriate Wine binary for registry operations"""
+        try:
+            # Method 1: Try to detect from Steam's config or use Proton from compat data
+            # Look for wine binary in common Proton locations
+            proton_paths = [
+                os.path.expanduser("~/.local/share/Steam/compatibilitytools.d"),
+                os.path.expanduser("~/.steam/steam/steamapps/common")
+            ]
+
+            for base_path in proton_paths:
+                if os.path.exists(base_path):
+                    for item in os.listdir(base_path):
+                        if 'proton' in item.lower():
+                            wine_path = os.path.join(base_path, item, 'files', 'bin', 'wine')
+                            if os.path.exists(wine_path):
+                                logger.debug(f"Found Wine binary: {wine_path}")
+                                return wine_path
+
+            # Method 2: Fallback to system wine if available
+            try:
+                result = subprocess.run(['which', 'wine'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    wine_path = result.stdout.strip()
+                    logger.debug(f"Using system Wine binary: {wine_path}")
+                    return wine_path
+            except Exception:
+                pass
+
+            logger.error("No suitable Wine binary found for registry operations")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error finding Wine binary: {e}")
+            return None
+
     def _inject_game_registry_entries(self, modlist_compatdata_path: str):
-        """Detect and inject FNV/Enderal game paths into modlist's system.reg"""
+        """Detect and inject FNV/Enderal game paths and apply universal dotnet4.x compatibility fixes"""
         system_reg_path = os.path.join(modlist_compatdata_path, "pfx", "system.reg")
         if not os.path.exists(system_reg_path):
             logger.warning("system.reg not found, skipping game path injection")
             return
-        
-        logger.info("Detecting and injecting game registry entries...")
+
+        logger.info("Detecting game registry entries...")
+
+        # NOTE: Universal dotnet4.x registry fixes now applied in modlist_handler.py after .reg downloads
         
         # Game configurations
         games_config = {

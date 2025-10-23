@@ -1,5 +1,15 @@
 # Jackify Changelog
 
+## v0.1.6.2 - Minor Bug Fixes
+**Release Date:** October 23, 2025
+
+### Bug Fixes
+- **Improved dotnet4.x Compatibility**: Universal registry fixes for better modlist compatibility
+- **Fixed Proton 9 Override**: A bug meant that modlists with spaces in the name weren't being overridden correctly
+- **Removed PageFileManager Plugin**: Eliminates Linux PageFile warnings
+
+---
+
 ## v0.1.6.1 - Fix dotnet40 install and expand Game Proton override
 **Release Date:** October 21, 2025
 
