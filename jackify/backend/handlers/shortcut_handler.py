@@ -1036,7 +1036,7 @@ class ShortcutHandler:
         matched_shortcuts = []
 
         if not self.shortcuts_path or not os.path.isfile(self.shortcuts_path):
-            self.logger.error(f"shortcuts.vdf path not found or invalid: {self.shortcuts_path}")
+            self.logger.info(f"No shortcuts.vdf file found at {self.shortcuts_path} - this is normal for new Steam installations")
             return []
 
         # Directly process the single shortcuts.vdf file found during init
@@ -1159,7 +1159,7 @@ class ShortcutHandler:
 
         # --- Use the single shortcuts.vdf path found during init --- 
         if not self.shortcuts_path or not os.path.isfile(self.shortcuts_path):
-            self.logger.error(f"shortcuts.vdf path not found or invalid: {self.shortcuts_path}")
+            self.logger.info(f"No shortcuts.vdf file found at {self.shortcuts_path} - this is normal for new Steam installations")
             return []
         
         vdf_path = self.shortcuts_path

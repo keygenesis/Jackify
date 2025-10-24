@@ -1,5 +1,14 @@
 # Jackify Changelog
 
+## v0.1.6.4 - Flatpak Steam Detection Hotfix
+**Release Date:** October 24, 2025
+
+### Critical Bug Fixes
+- **FIXED: Flatpak Steam Detection**: Added support for `/data/Steam/` directory structure used by some Flatpak Steam installations
+- **IMPROVED: Steam Path Detection**: Now checks all known Flatpak Steam directory structures for maximum compatibility
+
+---
+
 ## v0.1.6.3 - Emergency Hotfix
 **Release Date:** October 23, 2025
 

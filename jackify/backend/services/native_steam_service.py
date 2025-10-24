@@ -33,7 +33,9 @@ class NativeSteamService:
         self.steam_paths = [
             Path.home() / ".steam" / "steam",
             Path.home() / ".local" / "share" / "Steam",
-            Path.home() / ".var" / "app" / "com.valvesoftware.Steam" / ".local" / "share" / "Steam"
+            Path.home() / ".var" / "app" / "com.valvesoftware.Steam" / "data" / "Steam",
+            Path.home() / ".var" / "app" / "com.valvesoftware.Steam" / ".local" / "share" / "Steam",
+            Path.home() / ".var" / "app" / "com.valvesoftware.Steam" / "home" / ".local" / "share" / "Steam"
         ]
         self.steam_path = None
         self.userdata_path = None
@@ -54,8 +56,20 @@ class NativeSteamService:
             # Step 2: Parse loginusers.vdf to get the most recent user (SteamID64)
             steamid64 = self._get_most_recent_user_from_loginusers()
             if not steamid64:
-                logger.error("Could not determine most recent Steam user from loginusers.vdf")
-                return False
+                logger.warning("Could not determine most recent Steam user from loginusers.vdf, trying fallback method")
+                # Fallback: Look for existing user directories in userdata
+                steamid3 = self._find_user_from_userdata_directory()
+                if steamid3:
+                    logger.info(f"Found Steam user using userdata directory fallback: SteamID3={steamid3}")
+                    # Skip the conversion step since we already have SteamID3
+                    self.user_id = str(steamid3)
+                    self.user_config_path = self.userdata_path / str(steamid3) / "config"
+                    logger.info(f"Steam user set up via fallback: {self.user_id}")
+                    logger.info(f"User config path: {self.user_config_path}")
+                    return True
+                else:
+                    logger.error("Could not determine Steam user using any method")
+                    return False
 
             # Step 3: Convert SteamID64 to SteamID3 (userdata directory format)
             steamid3 = self._convert_steamid64_to_steamid3(steamid64)
