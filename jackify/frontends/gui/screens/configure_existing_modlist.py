@@ -37,7 +37,9 @@ class ConfigureExistingModlistScreen(QWidget):
         self.refresh_paths()
         
         # --- Detect Steam Deck ---
-        steamdeck = os.path.exists('/etc/os-release') and 'steamdeck' in open('/etc/os-release').read().lower()
+        from jackify.backend.services.platform_detection_service import PlatformDetectionService
+        platform_service = PlatformDetectionService.get_instance()
+        steamdeck = platform_service.is_steamdeck
         self.shortcut_handler = ShortcutHandler(steamdeck=steamdeck)
         
         # Initialize services early

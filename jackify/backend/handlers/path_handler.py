@@ -777,17 +777,35 @@ class PathHandler:
             
             # Extract existing gamePath to use as source of truth for vanilla game location
             existing_game_path = None
-            for line in lines:
+            gamepath_line_index = -1
+            for i, line in enumerate(lines):
                 if re.match(r'^\s*gamepath\s*=.*@ByteArray\(([^)]+)\)', line, re.IGNORECASE):
                     match = re.search(r'@ByteArray\(([^)]+)\)', line)
                     if match:
                         raw_path = match.group(1)
+                        gamepath_line_index = i
                         # Convert Windows path back to Linux path
                         if raw_path.startswith(('Z:', 'D:')):
                             linux_path = raw_path[2:].replace('\\\\', '/').replace('\\', '/')
                             existing_game_path = linux_path
                             logger.debug(f"Extracted existing gamePath: {existing_game_path}")
                             break
+
+            # Special handling for gamePath in three-true scenario (engine_installed + steamdeck + sdcard)
+            if modlist_sdcard and existing_game_path and existing_game_path.startswith('/run/media') and gamepath_line_index != -1:
+                # Simple manual stripping of /run/media/deck/UUID pattern for SD card paths
+                # Match /run/media/deck/[UUID]/Games/... and extract just /Games/...
+                sdcard_pattern = r'^/run/media/deck/[^/]+(/Games/.*)$'
+                match = re.match(sdcard_pattern, existing_game_path)
+                if match:
+                    stripped_path = match.group(1)  # Just the /Games/... part
+                    new_gamepath_value = f"D:\\\\{stripped_path.replace('/', '\\\\')}"
+                    new_gamepath_line = f"gamePath = @ByteArray({new_gamepath_value})\n"
+
+                    logger.info(f"Updating gamePath for SD card: {lines[gamepath_line_index].strip()} -> {new_gamepath_line.strip()}")
+                    lines[gamepath_line_index] = new_gamepath_line
+                else:
+                    logger.warning(f"SD card path doesn't match expected pattern: {existing_game_path}")
             
             game_path_updated = False
             binary_paths_updated = 0

@@ -668,7 +668,10 @@ class WineUtils:
         # Add standard compatibility tool locations (covers edge cases like Flatpak)
         compatibility_paths.extend([
             Path.home() / ".steam/root/compatibilitytools.d",
-            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d"
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d",
+            # Flatpak GE-Proton extension paths
+            Path.home() / ".var/app/com.valvesoftware.Steam.CompatibilityTool.Proton-GE/.local/share/Steam/compatibilitytools.d",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d/GE-Proton"
         ])
         # Special handling for Proton 9: try all possible directory names
         if proton_version.strip().startswith("Proton 9"):
@@ -822,7 +825,12 @@ class WineUtils:
         """
         compat_paths = [
             Path.home() / ".steam/steam/compatibilitytools.d",
-            Path.home() / ".local/share/Steam/compatibilitytools.d"
+            Path.home() / ".local/share/Steam/compatibilitytools.d",
+            Path.home() / ".steam/root/compatibilitytools.d",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d",
+            # Flatpak GE-Proton extension paths
+            Path.home() / ".var/app/com.valvesoftware.Steam.CompatibilityTool.Proton-GE/.local/share/Steam/compatibilitytools.d",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d/GE-Proton"
         ]
 
         # Return only existing paths

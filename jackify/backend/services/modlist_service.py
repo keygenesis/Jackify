@@ -34,8 +34,10 @@ class ModlistService:
         """Lazy initialization of modlist handler."""
         if self._modlist_handler is None:
             from ..handlers.modlist_handler import ModlistHandler
-            # Initialize with proper dependencies
-            self._modlist_handler = ModlistHandler()
+            from ..services.platform_detection_service import PlatformDetectionService
+            # Initialize with proper dependencies and centralized Steam Deck detection
+            platform_service = PlatformDetectionService.get_instance()
+            self._modlist_handler = ModlistHandler(steamdeck=platform_service.is_steamdeck)
         return self._modlist_handler
     
     def _get_wabbajack_handler(self):

@@ -438,19 +438,37 @@ class SettingsDialog(QDialog):
 
         advanced_layout.addWidget(resource_group)
 
-        # Component Installation Method Section
-        component_group = QGroupBox("Component Installation")
+        # Advanced Tool Options Section
+        component_group = QGroupBox("Advanced Tool Options")
         component_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
         component_layout = QVBoxLayout()
         component_group.setLayout(component_layout)
 
-        self.use_winetricks_checkbox = QCheckBox("Use winetricks for component installation (faster)")
-        self.use_winetricks_checkbox.setChecked(self.config_handler.get('use_winetricks_for_components', True))
-        self.use_winetricks_checkbox.setToolTip(
-            "When enabled: Uses winetricks for most components (faster) and protontricks for legacy .NET versions (dotnet40, dotnet472, dotnet48) which are more reliable.\n"
-            "When disabled: Uses protontricks for all components (legacy behavior, slower but more compatible)."
+        # Label for the toggle button
+        method_label = QLabel("Wine Components Installation:")
+        component_layout.addWidget(method_label)
+
+        # Toggle button for winetricks/protontricks selection
+        self.component_toggle = QPushButton("Winetricks")
+        self.component_toggle.setCheckable(True)
+        use_winetricks = self.config_handler.get('use_winetricks_for_components', True)
+        self.component_toggle.setChecked(use_winetricks)
+
+        # Function to update button text based on state
+        def update_button_text():
+            if self.component_toggle.isChecked():
+                self.component_toggle.setText("Winetricks")
+            else:
+                self.component_toggle.setText("Protontricks")
+
+        self.component_toggle.toggled.connect(update_button_text)
+        update_button_text()  # Set initial text
+
+        self.component_toggle.setToolTip(
+            "Winetricks: Faster, uses bundled tools (Default)\n"
+            "Protontricks: Legacy mode, slower but system-compatible"
         )
-        component_layout.addWidget(self.use_winetricks_checkbox)
+        component_layout.addWidget(self.component_toggle)
 
         advanced_layout.addWidget(component_group)
         advanced_layout.addStretch()  # Add stretch to push content to top
@@ -726,7 +744,7 @@ class SettingsDialog(QDialog):
             self.config_handler.set("game_proton_version", resolved_game_version)
 
             # Save component installation method preference
-            self.config_handler.set("use_winetricks_for_components", self.use_winetricks_checkbox.isChecked())
+            self.config_handler.set("use_winetricks_for_components", self.component_toggle.isChecked())
 
             # Force immediate save and verify
             save_result = self.config_handler.save_config()

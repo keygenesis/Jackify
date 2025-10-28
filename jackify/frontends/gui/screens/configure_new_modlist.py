@@ -591,7 +591,9 @@ class ConfigureNewModlistScreen(QWidget):
             return
         # --- Shortcut creation will be handled by automated workflow ---
         from jackify.backend.handlers.shortcut_handler import ShortcutHandler
-        steamdeck = os.path.exists('/etc/os-release') and 'steamdeck' in open('/etc/os-release').read().lower()
+        from jackify.backend.services.platform_detection_service import PlatformDetectionService
+        platform_service = PlatformDetectionService.get_instance()
+        steamdeck = platform_service.is_steamdeck
         shortcut_handler = ShortcutHandler(steamdeck=steamdeck)  # Still needed for Steam restart
         
         # Check if auto-restart is enabled
@@ -723,16 +725,10 @@ class ConfigureNewModlistScreen(QWidget):
                 except Exception as e:
                     self.error_occurred.emit(str(e))
         
-        # Detect Steam Deck once
-        try:
-            import os
-            _is_steamdeck = False
-            if os.path.exists('/etc/os-release'):
-                with open('/etc/os-release') as f:
-                    if 'steamdeck' in f.read().lower():
-                        _is_steamdeck = True
-        except Exception:
-            _is_steamdeck = False
+        # Detect Steam Deck once using centralized service
+        from jackify.backend.services.platform_detection_service import PlatformDetectionService
+        platform_service = PlatformDetectionService.get_instance()
+        _is_steamdeck = platform_service.is_steamdeck
         
         # Create and start the thread
         self.automated_prefix_thread = AutomatedPrefixThread(modlist_name, install_dir, mo2_exe_path, _is_steamdeck)
@@ -928,7 +924,10 @@ class ConfigureNewModlistScreen(QWidget):
         # Steam assigns a NEW AppID during restart, different from the one we initially created
         self._safe_append_text(f"Re-detecting AppID for shortcut '{modlist_name}' after Steam restart...")
         from jackify.backend.handlers.shortcut_handler import ShortcutHandler
-        shortcut_handler = ShortcutHandler(steamdeck=False)
+        from jackify.backend.services.platform_detection_service import PlatformDetectionService
+
+        platform_service = PlatformDetectionService.get_instance()
+        shortcut_handler = ShortcutHandler(steamdeck=platform_service.is_steamdeck)
         current_appid = shortcut_handler.get_appid_for_shortcut(modlist_name, mo2_exe_path)
         
         if not current_appid or not current_appid.isdigit():
@@ -952,7 +951,12 @@ class ConfigureNewModlistScreen(QWidget):
             
             # Initialize ModlistHandler with correct parameters
             path_handler = PathHandler()
-            modlist_handler = ModlistHandler(steamdeck=False, verbose=False)
+
+            # Use centralized Steam Deck detection
+            from jackify.backend.services.platform_detection_service import PlatformDetectionService
+            platform_service = PlatformDetectionService.get_instance()
+
+            modlist_handler = ModlistHandler(steamdeck=platform_service.is_steamdeck, verbose=False)
             
             # Set required properties manually after initialization
             modlist_handler.modlist_dir = install_dir

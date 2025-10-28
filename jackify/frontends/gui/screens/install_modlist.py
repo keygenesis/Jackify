@@ -2112,7 +2112,10 @@ class InstallModlistScreen(QWidget):
         # Steam assigns a NEW AppID during restart, different from the one we initially created
         self._safe_append_text(f"Re-detecting AppID for shortcut '{modlist_name}' after Steam restart...")
         from jackify.backend.handlers.shortcut_handler import ShortcutHandler
-        shortcut_handler = ShortcutHandler(steamdeck=False)
+        from jackify.backend.services.platform_detection_service import PlatformDetectionService
+
+        platform_service = PlatformDetectionService.get_instance()
+        shortcut_handler = ShortcutHandler(steamdeck=platform_service.is_steamdeck)
         current_appid = shortcut_handler.get_appid_for_shortcut(modlist_name, mo2_exe_path)
         
         if not current_appid or not current_appid.isdigit():
@@ -2133,7 +2136,12 @@ class InstallModlistScreen(QWidget):
             
             # Initialize ModlistHandler with correct parameters
             path_handler = PathHandler()
-            modlist_handler = ModlistHandler(steamdeck=False, verbose=False)
+
+            # Use centralized Steam Deck detection
+            from jackify.backend.services.platform_detection_service import PlatformDetectionService
+            platform_service = PlatformDetectionService.get_instance()
+
+            modlist_handler = ModlistHandler(steamdeck=platform_service.is_steamdeck, verbose=False)
             
             # Set required properties manually after initialization
             modlist_handler.modlist_dir = install_dir
@@ -2351,15 +2359,21 @@ class InstallModlistScreen(QWidget):
             self.context = updated_context  # Ensure context is always set
             debug_print(f"Updated context with new AppID: {new_appid}")
             
+            # Get Steam Deck detection once and pass to ConfigThread
+            from jackify.backend.services.platform_detection_service import PlatformDetectionService
+            platform_service = PlatformDetectionService.get_instance()
+            is_steamdeck = platform_service.is_steamdeck
+
             # Create new config thread with updated context
             class ConfigThread(QThread):
                 progress_update = Signal(str)
                 configuration_complete = Signal(bool, str, str)
                 error_occurred = Signal(str)
-                
-                def __init__(self, context):
+
+                def __init__(self, context, is_steamdeck):
                     super().__init__()
                     self.context = context
+                    self.is_steamdeck = is_steamdeck
                 
                 def run(self):
                     try:
@@ -2368,8 +2382,8 @@ class InstallModlistScreen(QWidget):
                         from jackify.backend.models.modlist import ModlistContext
                         from pathlib import Path
                         
-                        # Initialize backend service
-                        system_info = SystemInfo(is_steamdeck=False)
+                        # Initialize backend service with passed Steam Deck detection
+                        system_info = SystemInfo(is_steamdeck=self.is_steamdeck)
                         modlist_service = ModlistService(system_info)
                         
                         # Convert context to ModlistContext for service
@@ -2416,7 +2430,7 @@ class InstallModlistScreen(QWidget):
                         self.error_occurred.emit(str(e))
             
             # Start configuration thread
-            self.config_thread = ConfigThread(updated_context)
+            self.config_thread = ConfigThread(updated_context, is_steamdeck)
             self.config_thread.progress_update.connect(self.on_configuration_progress)
             self.config_thread.configuration_complete.connect(self.on_configuration_complete)
             self.config_thread.error_occurred.connect(self.on_configuration_error)
@@ -2477,15 +2491,21 @@ class InstallModlistScreen(QWidget):
     def _create_config_thread(self, context):
         """Create a new ConfigThread with proper lifecycle management"""
         from PySide6.QtCore import QThread, Signal
-        
+
+        # Get Steam Deck detection once
+        from jackify.backend.services.platform_detection_service import PlatformDetectionService
+        platform_service = PlatformDetectionService.get_instance()
+        is_steamdeck = platform_service.is_steamdeck
+
         class ConfigThread(QThread):
             progress_update = Signal(str)
             configuration_complete = Signal(bool, str, str)
             error_occurred = Signal(str)
-            
-            def __init__(self, context, parent=None):
+
+            def __init__(self, context, is_steamdeck, parent=None):
                 super().__init__(parent)
                 self.context = context
+                self.is_steamdeck = is_steamdeck
                 
             def run(self):
                 try:
@@ -2494,8 +2514,8 @@ class InstallModlistScreen(QWidget):
                     from jackify.backend.models.modlist import ModlistContext
                     from pathlib import Path
                     
-                    # Initialize backend service
-                    system_info = SystemInfo(is_steamdeck=False)
+                    # Initialize backend service with passed Steam Deck detection
+                    system_info = SystemInfo(is_steamdeck=self.is_steamdeck)
                     modlist_service = ModlistService(system_info)
                     
                     # Convert context to ModlistContext for service
@@ -2544,7 +2564,7 @@ class InstallModlistScreen(QWidget):
                     self.progress_update.emit(f"DEBUG: {error_details}")
                     self.error_occurred.emit(str(e))
         
-        return ConfigThread(context, parent=self)
+        return ConfigThread(context, is_steamdeck, parent=self)
 
     def handle_validation_failure(self, missing_text):
         """Handle failed validation with retry logic"""

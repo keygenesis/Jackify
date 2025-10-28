@@ -149,9 +149,29 @@ class ProtontricksHandler:
                 should_install = True
             else:
                 try:
-                    response = input("Protontricks not found. Install the Flatpak version? (Y/n): ").lower()
-                    if response == 'y' or response == '':
+                    print("\nProtontricks not found. Choose installation method:")
+                    print("1. Install via Flatpak (automatic)")
+                    print("2. Install via native package manager (manual)")
+                    print("3. Skip (Use bundled winetricks instead)")
+                    choice = input("Enter choice (1/2/3): ").strip()
+
+                    if choice == '1' or choice == '':
                         should_install = True
+                    elif choice == '2':
+                        print("\nTo install protontricks via your system package manager:")
+                        print("• Ubuntu/Debian: sudo apt install protontricks")
+                        print("• Fedora: sudo dnf install protontricks")
+                        print("• Arch Linux: sudo pacman -S protontricks")
+                        print("• openSUSE: sudo zypper install protontricks")
+                        print("\nAfter installation, please rerun Jackify.")
+                        return False
+                    elif choice == '3':
+                        print("Skipping protontricks installation. Will use bundled winetricks for component installation.")
+                        logger.info("User chose to skip protontricks and use winetricks fallback")
+                        return False
+                    else:
+                        print("Invalid choice. Installation cancelled.")
+                        return False
                 except KeyboardInterrupt:
                      print("\nInstallation cancelled.")
                      return False

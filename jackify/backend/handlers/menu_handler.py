@@ -152,8 +152,10 @@ class ModlistMenuHandler:
             self.path_handler = PathHandler()
             self.vdf_handler = VDFHandler()
             
-            # Determine Steam Deck status (already done by ConfigHandler, use it)
-            self.steamdeck = config_handler.settings.get('steamdeck', False)
+            # Determine Steam Deck status using centralized detection
+            from ..services.platform_detection_service import PlatformDetectionService
+            platform_service = PlatformDetectionService.get_instance()
+            self.steamdeck = platform_service.is_steamdeck
             
             # Create the resolution handler
             self.resolution_handler = ResolutionHandler()
@@ -178,7 +180,13 @@ class ModlistMenuHandler:
             self.logger.error(f"Error initializing ModlistMenuHandler: {e}")
             # Initialize with defaults/empty to prevent errors
             self.filesystem_handler = FileSystemHandler()
-            self.steamdeck = False
+            # Use centralized detection even in fallback
+            try:
+                from ..services.platform_detection_service import PlatformDetectionService
+                platform_service = PlatformDetectionService.get_instance()
+                self.steamdeck = platform_service.is_steamdeck
+            except:
+                self.steamdeck = False  # Final fallback
             self.modlist_handler = None
 
     def show_modlist_menu(self):

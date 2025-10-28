@@ -1,5 +1,16 @@
 # Jackify Changelog
 
+## v0.1.6.5 - Steam Deck SD Card Path Fix
+**Release Date:** October 27, 2025
+
+### Bug Fixes
+- **Fixed Steam Deck SD card path manipulation** when jackify-engine installed
+- **Fixed Ubuntu Qt platform plugin errors** by bundling XCB libraries
+- **Added Flatpak GE-Proton detection** and protontricks installation choices
+- **Extended Steam Deck SD card timeouts** for slower I/O operations
+
+---
+
 ## v0.1.6.4 - Flatpak Steam Detection Hotfix
 **Release Date:** October 24, 2025
 

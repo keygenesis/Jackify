@@ -2697,9 +2697,18 @@ echo Prefix creation complete.
             # Run proton run wineboot -u to initialize the prefix
             cmd = [str(proton_path), 'run', 'wineboot', '-u']
             logger.info(f"Running: {' '.join(cmd)}")
-            
+
+            # Adjust timeout for SD card installations on Steam Deck (slower I/O)
+            from ..services.platform_detection_service import PlatformDetectionService
+            platform_service = PlatformDetectionService.get_instance()
+            is_steamdeck_sdcard = (platform_service.is_steamdeck and
+                                 str(proton_path).startswith('/run/media/'))
+            timeout = 180 if is_steamdeck_sdcard else 60
+            if is_steamdeck_sdcard:
+                logger.info(f"Using extended timeout ({timeout}s) for Steam Deck SD card Proton installation")
+
             # Use jackify-engine's approach: UseShellExecute=false, CreateNoWindow=true equivalent
-            result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60,
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout,
                                   shell=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             logger.info(f"Proton exit code: {result.returncode}")
             

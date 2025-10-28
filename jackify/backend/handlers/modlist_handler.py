@@ -109,6 +109,12 @@ class ModlistHandler:
         self.logger = logging.getLogger(__name__)
         self.logger.propagate = False
         self.steamdeck = steamdeck
+
+        # DEBUG: Log ModlistHandler instantiation details for SD card path debugging
+        import traceback
+        caller_info = traceback.extract_stack()[-2]  # Get caller info
+        self.logger.debug(f"[SD_CARD_DEBUG] ModlistHandler created: id={id(self)}, steamdeck={steamdeck}")
+        self.logger.debug(f"[SD_CARD_DEBUG] Created from: {caller_info.filename}:{caller_info.lineno} in {caller_info.name}()")
         self.steam_path: Optional[Path] = None
         self.verbose = verbose # Store verbose flag
         self.mo2_path: Optional[Path] = None
@@ -321,13 +327,24 @@ class ModlistHandler:
         
         # Determine if modlist is on SD card (Steam Deck only)
         # On non-Steam Deck systems, /media mounts should use Z: drive, not D: drive
-        if (str(self.modlist_dir).startswith("/run/media") or str(self.modlist_dir).startswith("/media")) and self.steamdeck:
+        is_on_sdcard_path = str(self.modlist_dir).startswith("/run/media") or str(self.modlist_dir).startswith("/media")
+
+        # DEBUG: Log SD card detection logic
+        self.logger.debug(f"[SD_CARD_DEBUG] SD card detection for instance id={id(self)}:")
+        self.logger.debug(f"[SD_CARD_DEBUG] modlist_dir: {self.modlist_dir}")
+        self.logger.debug(f"[SD_CARD_DEBUG] is_on_sdcard_path: {is_on_sdcard_path}")
+        self.logger.debug(f"[SD_CARD_DEBUG] self.steamdeck: {self.steamdeck}")
+
+        if is_on_sdcard_path and self.steamdeck:
              self.modlist_sdcard = True
              self.logger.info("Modlist appears to be on an SD card (Steam Deck).")
+             self.logger.debug(f"[SD_CARD_DEBUG] Set modlist_sdcard=True")
         else:
              self.modlist_sdcard = False
-             if (str(self.modlist_dir).startswith("/run/media") or str(self.modlist_dir).startswith("/media")) and not self.steamdeck:
+             self.logger.debug(f"[SD_CARD_DEBUG] Set modlist_sdcard=False because: is_on_sdcard_path={is_on_sdcard_path} AND steamdeck={self.steamdeck}")
+             if is_on_sdcard_path and not self.steamdeck:
                  self.logger.info("Modlist on /media mount detected on non-Steam Deck system - using Z: drive mapping.")
+                 self.logger.debug("[SD_CARD_DEBUG] This is the ROOT CAUSE - SD card path but steamdeck=False!")
 
         # Find and set compatdata path now that we have appid
         # Ensure PathHandler is available (should be initialized in __init__)
@@ -812,6 +829,15 @@ class ModlistHandler:
         # Conditionally update binary and working directory paths
         # Skip for jackify-engine workflows since paths are already correct
         # Exception: Always run for SD card installs to fix Z:/run/media/... to D:/... paths
+
+        # DEBUG: Add comprehensive logging to identify Steam Deck SD card path manipulation issues
+        engine_installed = getattr(self, 'engine_installed', False)
+        self.logger.debug(f"[SD_CARD_DEBUG] ModlistHandler instance: id={id(self)}")
+        self.logger.debug(f"[SD_CARD_DEBUG] engine_installed: {engine_installed}")
+        self.logger.debug(f"[SD_CARD_DEBUG] modlist_sdcard: {self.modlist_sdcard}")
+        self.logger.debug(f"[SD_CARD_DEBUG] steamdeck parameter passed to constructor: {getattr(self, 'steamdeck', 'NOT_SET')}")
+        self.logger.debug(f"[SD_CARD_DEBUG] Path manipulation condition: not {engine_installed} or {self.modlist_sdcard} = {not engine_installed or self.modlist_sdcard}")
+
         if not getattr(self, 'engine_installed', False) or self.modlist_sdcard:
             # Convert steamapps/common path to library root path
             steam_libraries = None
@@ -831,7 +857,8 @@ class ModlistHandler:
                 print("Error: Failed to update binary and working directory paths in ModOrganizer.ini.")
                 return False  # Abort on failure
         else:
-            self.logger.debug("Skipping path manipulation - jackify-engine already set correct paths in ModOrganizer.ini")
+            self.logger.debug("[SD_CARD_DEBUG] Skipping path manipulation - jackify-engine already set correct paths in ModOrganizer.ini")
+            self.logger.debug(f"[SD_CARD_DEBUG] SKIPPED because: engine_installed={engine_installed} and modlist_sdcard={self.modlist_sdcard}")
         self.logger.info("Step 8: Updating ModOrganizer.ini paths... Done")
 
         # Step 9: Update Resolution Settings (if applicable)
