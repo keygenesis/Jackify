@@ -1,5 +1,13 @@
 # Jackify Changelog
 
+## v0.1.6.6 - AppImage Bundling Fix
+**Release Date:** October 29, 2025
+
+### Bug Fixes
+- **Fixed AppImage bundling issue** causing legacy code to be retained in rare circumstances
+
+---
+
 ## v0.1.6.5 - Steam Deck SD Card Path Fix
 **Release Date:** October 27, 2025
 
