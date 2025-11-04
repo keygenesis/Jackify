@@ -15,7 +15,7 @@ from .filesystem_handler import FileSystemHandler
 from .config_handler import ConfigHandler
 # Import color constants needed for print statements in this module
 from .ui_colors import COLOR_ERROR, COLOR_SUCCESS, COLOR_WARNING, COLOR_RESET, COLOR_INFO, COLOR_PROMPT, COLOR_SELECTION
-# Standard logging (no file handler) - LoggingHandler import removed
+from .logging_handler import LoggingHandler
 from .status_utils import show_status, clear_status
 from .subprocess_utils import get_clean_subprocess_env
 
@@ -55,8 +55,10 @@ class HoolamikeHandler:
         self.filesystem_handler = filesystem_handler
         self.config_handler = config_handler
         self.menu_handler = menu_handler
-        # Use standard logging (no file handler)
-        self.logger = logging.getLogger(__name__)
+        # Set up dedicated log file for TTW operations
+        logging_handler = LoggingHandler()
+        logging_handler.rotate_log_for_logger('ttw-install', 'TTW_Install_workflow.log')
+        self.logger = logging_handler.setup_logger('ttw-install', 'TTW_Install_workflow.log')
 
         # --- Discovered/Managed State --- 
         self.game_install_paths: Dict[str, Path] = {}
@@ -213,7 +215,7 @@ class HoolamikeHandler:
                 if not self.hoolamike_config.get("games"):
                     f.write("# No games were detected by Jackify. Add game paths manually if needed.\n")
                 # Dump the actual YAML
-                yaml.dump(self.hoolamike_config, f, default_flow_style=False, sort_keys=False)
+                yaml.dump(self.hoolamike_config, f, default_flow_style=False, sort_keys=False, width=float('inf'))
              self.logger.info("Configuration saved successfully.")
              return True
          except Exception as e:
@@ -224,9 +226,12 @@ class HoolamikeHandler:
         """Execute all discovery steps."""
         self.logger.info("Starting Hoolamike feature discovery phase...")
 
+        # Check if Hoolamike is installed
+        self._check_hoolamike_installation()
+
         # Detect game paths and update internal state + config
         self._detect_and_update_game_paths()
-        
+
         self.logger.info("Hoolamike discovery phase complete.")
 
     def _detect_and_update_game_paths(self):
@@ -242,22 +247,143 @@ class HoolamikeHandler:
             self.logger.debug("Updating loaded hoolamike.yaml with detected game paths.")
             if "games" not in self.hoolamike_config or not isinstance(self.hoolamike_config.get("games"), dict):
                 self.hoolamike_config["games"] = {} # Ensure games section exists
-            
+
             # Define a unified format for game names in config - no spaces
             # Clear existing entries first to avoid duplicates
             self.hoolamike_config["games"] = {}
-            
+
             # Add detected paths with proper formatting - no spaces
             for game_name, detected_path in detected_paths.items():
                 formatted_name = self._format_game_name(game_name)
                 self.hoolamike_config["games"][formatted_name] = {"root_directory": str(detected_path)}
-                
+
             self.logger.info(f"Updated config with {len(detected_paths)} game paths using correct naming format (no spaces)")
+
+            # Save the updated config to disk so Hoolamike can read it
+            if detected_paths:
+                self.logger.info("Saving updated game paths to hoolamike.yaml")
+                self.save_hoolamike_config()
         else:
             self.logger.warning("Cannot update game paths in config because config is not loaded.")
 
-    # --- Methods for Hoolamike Tasks (To be implemented later) ---
-    # TODO: Update these methods to accept necessary parameters and update/save config
+    # --- Methods for Hoolamike Tasks ---
+    # GUI-safe, non-interactive installer used by Install TTW screen
+    def install_hoolamike(self, install_dir: Optional[Path] = None) -> tuple[bool, str]:
+        """Non-interactive install/update of Hoolamike for GUI usage.
+
+        Downloads the latest Linux x86_64 release from GitHub, extracts it to the
+        Jackify-managed directory (~/Jackify/Hoolamike by default or provided install_dir),
+        sets executable permissions, and saves the install path to Jackify config.
+
+        Returns:
+            (success, message)
+        """
+        try:
+            self._ensure_hoolamike_dirs_exist()
+            # Determine target install directory
+            target_dir = Path(install_dir) if install_dir else self.hoolamike_app_install_path
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Fetch latest release info
+            release_url = "https://api.github.com/repos/Niedzwiedzw/hoolamike/releases/latest"
+            self.logger.info(f"Fetching latest Hoolamike release info from {release_url}")
+            resp = requests.get(release_url, timeout=15, verify=True)
+            resp.raise_for_status()
+            data = resp.json()
+            release_tag = data.get("tag_name") or data.get("name")
+
+            linux_asset = None
+            for asset in data.get("assets", []):
+                name = asset.get("name", "").lower()
+                if "linux" in name and (name.endswith(".tar.gz") or name.endswith(".tgz") or name.endswith(".zip")) and ("x86_64" in name or "amd64" in name):
+                    linux_asset = asset
+                    break
+
+            if not linux_asset:
+                return False, "No suitable Linux x86_64 Hoolamike asset found in latest release"
+
+            download_url = linux_asset.get("browser_download_url")
+            asset_name = linux_asset.get("name")
+            if not download_url or not asset_name:
+                return False, "Latest release is missing required asset metadata"
+
+            # Download to target directory
+            temp_path = target_dir / asset_name
+            if not self.filesystem_handler.download_file(download_url, temp_path, overwrite=True, quiet=True):
+                return False, "Failed to download Hoolamike asset"
+
+            # Extract
+            try:
+                if asset_name.lower().endswith((".tar.gz", ".tgz")):
+                    with tarfile.open(temp_path, "r:*") as tar:
+                        tar.extractall(path=target_dir)
+                elif asset_name.lower().endswith(".zip"):
+                    with zipfile.ZipFile(temp_path, "r") as zf:
+                        zf.extractall(target_dir)
+                else:
+                    return False, f"Unknown archive format: {asset_name}"
+            finally:
+                try:
+                    temp_path.unlink(missing_ok=True)  # cleanup
+                except Exception:
+                    pass
+
+            # Ensure executable bit on binary
+            exe_path = target_dir / HOOLAMIKE_EXECUTABLE_NAME
+            if not exe_path.is_file():
+                # Some archives may include a subfolder; try to locate the binary
+                for p in target_dir.rglob(HOOLAMIKE_EXECUTABLE_NAME):
+                    if p.is_file():
+                        exe_path = p
+                        break
+            if not exe_path.is_file():
+                return False, "Hoolamike binary not found after extraction"
+            try:
+                os.chmod(exe_path, 0o755)
+            except Exception as e:
+                self.logger.warning(f"Failed to chmod +x on {exe_path}: {e}")
+
+            # Mark installed and persist path
+            self.hoolamike_app_install_path = target_dir
+            self.hoolamike_executable_path = exe_path
+            self.hoolamike_installed = True
+            self.config_handler.set('hoolamike_install_path', str(target_dir))
+            if release_tag:
+                self.config_handler.set('hoolamike_version', str(release_tag))
+            self.config_handler.save_config()
+
+            return True, f"Hoolamike installed at {target_dir}"
+        except Exception as e:
+            self.logger.error("Hoolamike installation failed", exc_info=True)
+            return False, f"Error installing Hoolamike: {e}"
+
+    def get_installed_hoolamike_version(self) -> Optional[str]:
+        """Return the installed Hoolamike version stored in Jackify config, if any."""
+        try:
+            v = self.config_handler.get('hoolamike_version')
+            return str(v) if v else None
+        except Exception:
+            return None
+
+    def is_hoolamike_update_available(self) -> tuple[bool, Optional[str], Optional[str]]:
+        """
+        Check GitHub for the latest Hoolamike release and compare with installed version.
+        Returns (update_available, installed_version, latest_version).
+        """
+        installed = self.get_installed_hoolamike_version()
+        try:
+            release_url = "https://api.github.com/repos/Niedzwiedzw/hoolamike/releases/latest"
+            resp = requests.get(release_url, timeout=10, verify=True)
+            resp.raise_for_status()
+            latest = resp.json().get('tag_name') or resp.json().get('name')
+            if not latest:
+                return (False, installed, None)
+            if not installed:
+                # No version recorded but installed may exist; treat as update available
+                return (True, None, latest)
+            return (installed != str(latest), installed, str(latest))
+        except Exception:
+            return (False, installed, None)
 
     def install_update_hoolamike(self, context=None) -> bool:
         """Install or update Hoolamike application.
@@ -654,18 +780,89 @@ class HoolamikeHandler:
             input(f"{COLOR_PROMPT}Press Enter to return to the Hoolamike menu...{COLOR_RESET}")
             return False
 
-    def install_ttw(self, ttw_mpi_path=None, ttw_output_path=None, context=None):
-        """Install Tale of Two Wastelands (TTW) using Hoolamike.
+    def install_ttw_backend(self, ttw_mpi_path, ttw_output_path):
+        """Clean backend function for TTW installation - no user interaction.
         
         Args:
-            ttw_mpi_path: Path to the TTW installer .mpi file
-            ttw_output_path: Target installation directory for TTW
+            ttw_mpi_path: Path to the TTW installer .mpi file (required)
+            ttw_output_path: Target installation directory for TTW (required)
+            
+        Returns:
+            tuple: (success: bool, message: str)
+        """
+        self.logger.info(f"Starting Tale of Two Wastelands installation via Hoolamike")
+        
+        # Validate required parameters
+        if not ttw_mpi_path or not ttw_output_path:
+            return False, "Missing required parameters: ttw_mpi_path and ttw_output_path are required"
+        
+        # Convert to Path objects
+        ttw_mpi_path = Path(ttw_mpi_path)
+        ttw_output_path = Path(ttw_output_path)
+        
+        # Validate paths exist
+        if not ttw_mpi_path.exists():
+            return False, f"TTW .mpi file not found: {ttw_mpi_path}"
+        
+        if not ttw_output_path.exists():
+            try:
+                ttw_output_path.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                return False, f"Failed to create output directory: {e}"
+        
+        # Check Hoolamike installation
+        self._check_hoolamike_installation()
+        
+        # Ensure config is loaded
+        if self.hoolamike_config is None:
+            loaded = self._load_hoolamike_config()
+            if not loaded or self.hoolamike_config is None:
+                self.logger.error("Failed to load or generate hoolamike.yaml configuration.")
+                return False, "Failed to load or generate Hoolamike configuration"
+        
+        # Verify required games are detected
+        required_games = ['Fallout 3', 'Fallout New Vegas']
+        detected_games = self.path_handler.find_vanilla_game_paths()
+        missing_games = [game for game in required_games if game not in detected_games]
+        if missing_games:
+            self.logger.error(f"Missing required games for TTW installation: {', '.join(missing_games)}")
+            return False, f"Missing required games: {', '.join(missing_games)}. TTW requires both Fallout 3 and Fallout New Vegas."
+        
+        # Update TTW configuration
+        self._update_hoolamike_config_for_ttw(ttw_mpi_path, ttw_output_path)
+        if not self.save_hoolamike_config():
+            self.logger.error("Failed to save hoolamike.yaml configuration.")
+            return False, "Failed to save Hoolamike configuration"
+        
+        # Construct and execute command
+        cmd = [
+            str(self.hoolamike_executable_path),
+            "tale-of-two-wastelands"
+        ]
+        self.logger.info(f"Executing Hoolamike command: {' '.join(cmd)}")
+        
+        try:
+            ret = subprocess.call(cmd, cwd=str(self.hoolamike_app_install_path), env=get_clean_subprocess_env())
+            if ret == 0:
+                self.logger.info("TTW installation completed successfully.")
+                return True, "TTW installation completed successfully!"
+            else:
+                self.logger.error(f"TTW installation process returned non-zero exit code: {ret}")
+                return False, f"TTW installation failed with exit code {ret}"
+        except Exception as e:
+            self.logger.error(f"Error executing Hoolamike TTW installation: {e}", exc_info=True)
+            return False, f"Error executing Hoolamike TTW installation: {e}"
+
+    def install_ttw(self, ttw_mpi_path=None, ttw_output_path=None, context=None):
+        """CLI interface for TTW installation - handles user interaction and calls backend.
+        
+        Args:
+            ttw_mpi_path: Path to the TTW installer .mpi file (optional for CLI)
+            ttw_output_path: Target installation directory for TTW (optional for CLI)
             
         Returns:
             bool: True if successful, False otherwise
         """
-        self.logger.info(f"Starting Tale of Two Wastelands installation via Hoolamike")
-        self._check_hoolamike_installation()
         menu = self.menu_handler
         print(f"\n{'='*60}")
         print(f"{COLOR_INFO}Hoolamike: Tale of Two Wastelands Installation{COLOR_RESET}")
@@ -676,123 +873,90 @@ class HoolamikeHandler:
         print(f"  • You must provide the path to your TTW .mpi installer file.")
         print(f"  • You must select an output directory for the TTW install.\n")
 
-        # Ensure config is loaded
-        if self.hoolamike_config is None:
-            loaded = self._load_hoolamike_config()
-            if not loaded or self.hoolamike_config is None:
-                self.logger.error("Failed to load or generate hoolamike.yaml configuration.")
-                print(f"{COLOR_ERROR}Error: Could not load or generate Hoolamike configuration. Aborting TTW install.{COLOR_RESET}")
-                return False
-        
-        # Verify required games are in configuration
-        required_games = ['Fallout 3', 'Fallout New Vegas']
-        detected_games = self.path_handler.find_vanilla_game_paths()
-        missing_games = [game for game in required_games if game not in detected_games]
-        if missing_games:
-            self.logger.error(f"Missing required games for TTW installation: {', '.join(missing_games)}")
-            print(f"{COLOR_ERROR}Error: The following required games were not found: {', '.join(missing_games)}{COLOR_RESET}")
-            print("TTW requires both Fallout 3 and Fallout New Vegas to be installed.")
-            return False
-
-        # Prompt for TTW .mpi file
-        print(f"{COLOR_INFO}Please provide the path to your TTW .mpi installer file.{COLOR_RESET}")
-        print(f"You can download this from: {COLOR_INFO}https://mod.pub/ttw/133/files{COLOR_RESET}")
-        print(f"(Extract the .mpi file from the downloaded archive.)\n")
-        while not ttw_mpi_path:
-            candidate = menu.get_existing_file_path(
-                prompt_message="Enter the path to your TTW .mpi file (or 'q' to cancel):",
-                extension_filter=".mpi",
-                no_header=True
-            )
-            if candidate is None:
+        # If parameters provided, use them directly
+        if ttw_mpi_path and ttw_output_path:
+            print(f"{COLOR_INFO}Using provided parameters:{COLOR_RESET}")
+            print(f"- TTW .mpi file: {ttw_mpi_path}")
+            print(f"- Output directory: {ttw_output_path}")
+            print(f"{COLOR_WARNING}Proceed with these settings and start TTW installation? (This can take MANY HOURS){COLOR_RESET}")
+            confirm = input(f"{COLOR_PROMPT}[Y/n]: {COLOR_RESET}").strip().lower()
+            if confirm and not confirm.startswith('y'):
                 print(f"{COLOR_WARNING}Cancelled by user.{COLOR_RESET}")
                 return False
-            if str(candidate).strip().lower() == 'q':
+        else:
+            # Interactive mode - collect user input
+            print(f"{COLOR_INFO}Please provide the path to your TTW .mpi installer file.{COLOR_RESET}")
+            print(f"You can download this from: {COLOR_INFO}https://mod.pub/ttw/133/files{COLOR_RESET}")
+            print(f"(Extract the .mpi file from the downloaded archive.)\n")
+            while not ttw_mpi_path:
+                candidate = menu.get_existing_file_path(
+                    prompt_message="Enter the path to your TTW .mpi file (or 'q' to cancel):",
+                    extension_filter=".mpi",
+                    no_header=True
+                )
+                if candidate is None:
+                    print(f"{COLOR_WARNING}Cancelled by user.{COLOR_RESET}")
+                    return False
+                if str(candidate).strip().lower() == 'q':
+                    print(f"{COLOR_WARNING}Cancelled by user.{COLOR_RESET}")
+                    return False
+                ttw_mpi_path = candidate
+
+            # Prompt for output directory
+            print(f"\n{COLOR_INFO}Please select the output directory where TTW will be installed.{COLOR_RESET}")
+            print(f"(This should be an empty or new directory.)\n")
+            while not ttw_output_path:
+                ttw_output_path = menu.get_directory_path(
+                    prompt_message="Select the TTW output directory:",
+                    default_path=self.hoolamike_app_install_path / "TTW_Output",
+                    create_if_missing=True,
+                    no_header=False
+                )
+                if not ttw_output_path:
+                    print(f"{COLOR_WARNING}Cancelled by user.{COLOR_RESET}")
+                    return False
+                if ttw_output_path.exists() and any(ttw_output_path.iterdir()):
+                    print(f"{COLOR_WARNING}Warning: The selected directory '{ttw_output_path}' already exists and is not empty. Its contents may be overwritten!{COLOR_RESET}")
+                    confirm = input(f"{COLOR_PROMPT}This directory is not empty and may be overwritten. Proceed? (y/N): {COLOR_RESET}").strip().lower()
+                    if not confirm.startswith('y'):
+                        print(f"{COLOR_INFO}Please select a different directory.\n{COLOR_RESET}")
+                        ttw_output_path = None
+                        continue
+
+            # Summary & Confirmation
+            print(f"\n{'-'*60}")
+            print(f"{COLOR_INFO}Summary of configuration:{COLOR_RESET}")
+            print(f"- TTW .mpi file: {ttw_mpi_path}")
+            print(f"- Output directory: {ttw_output_path}")
+            print(f"{'-'*60}")
+            print(f"{COLOR_WARNING}Proceed with these settings and start TTW installation? (This can take MANY HOURS){COLOR_RESET}")
+            confirm = input(f"{COLOR_PROMPT}[Y/n]: {COLOR_RESET}").strip().lower()
+            if confirm and not confirm.startswith('y'):
                 print(f"{COLOR_WARNING}Cancelled by user.{COLOR_RESET}")
                 return False
-            ttw_mpi_path = candidate
 
-        # Prompt for output directory
-        print(f"\n{COLOR_INFO}Please select the output directory where TTW will be installed.{COLOR_RESET}")
-        print(f"(This should be an empty or new directory.)\n")
-        while not ttw_output_path:
-            ttw_output_path = menu.get_directory_path(
-                prompt_message="Select the TTW output directory:",
-                default_path=self.hoolamike_app_install_path / "TTW_Output",
-                create_if_missing=True,
-                no_header=False
-            )
-            if not ttw_output_path:
-                print(f"{COLOR_WARNING}Cancelled by user.{COLOR_RESET}")
-                return False
-            if ttw_output_path.exists() and any(ttw_output_path.iterdir()):
-                print(f"{COLOR_WARNING}Warning: The selected directory '{ttw_output_path}' already exists and is not empty. Its contents may be overwritten!{COLOR_RESET}")
-                confirm = input(f"{COLOR_PROMPT}This directory is not empty and may be overwritten. Proceed? (y/N): {COLOR_RESET}").strip().lower()
-                if not confirm.startswith('y'):
-                    print(f"{COLOR_INFO}Please select a different directory.\n{COLOR_RESET}")
-                    ttw_output_path = None
-                    continue
+        # Call the clean backend function
+        success, message = self.install_ttw_backend(ttw_mpi_path, ttw_output_path)
 
-        # --- Summary & Confirmation ---
-        print(f"\n{'-'*60}")
-        print(f"{COLOR_INFO}Summary of configuration:{COLOR_RESET}")
-        print(f"- TTW .mpi file: {ttw_mpi_path}")
-        print(f"- Output directory: {ttw_output_path}")
-        print("- Games:")
-        for game in required_games:
-            found = detected_games.get(game)
-            print(f"    {game}: {found if found else 'Not Found'}")
-        print(f"{'-'*60}")
-        print(f"{COLOR_WARNING}Proceed with these settings and start TTW installation? (This can take MANY HOURS){COLOR_RESET}")
-        confirm = input(f"{COLOR_PROMPT}[Y/n]: {COLOR_RESET}").strip().lower()
-        if confirm and not confirm.startswith('y'):
-            print(f"{COLOR_WARNING}Cancelled by user.{COLOR_RESET}")
-            return False
+        if success:
+            print(f"\n{COLOR_SUCCESS}{message}{COLOR_RESET}")
 
-        # --- Always re-detect games before updating config ---
-        detected_games = self.path_handler.find_vanilla_game_paths()
-        if not detected_games:
-            print(f"{COLOR_ERROR}No supported games were detected on your system. TTW requires Fallout 3 and Fallout New Vegas to be installed.{COLOR_RESET}")
-            return False
-        # Update the games section with correct keys
-        if self.hoolamike_config is None:
-            self.hoolamike_config = {}
-        self.hoolamike_config['games'] = {
-            self._format_game_name(game): {"root_directory": str(path)}
-            for game, path in detected_games.items()
-        }
+            # Offer to create MO2 zip archive
+            print(f"\n{COLOR_INFO}Would you like to create a zipped mod archive for MO2?{COLOR_RESET}")
+            print(f"This will package the TTW files for easy installation into Mod Organizer 2.")
+            create_zip = input(f"{COLOR_PROMPT}Create zip archive? [Y/n]: {COLOR_RESET}").strip().lower()
 
-        # Update TTW configuration
-        self._update_hoolamike_config_for_ttw(ttw_mpi_path, ttw_output_path)
-        if not self.save_hoolamike_config():
-            self.logger.error("Failed to save hoolamike.yaml configuration.")
-            print(f"{COLOR_ERROR}Error: Failed to save Hoolamike configuration.{COLOR_RESET}")
-            print("Attempting to continue anyway...")
-
-        # Construct command to execute
-        cmd = [
-            str(self.hoolamike_executable_path),
-            "tale-of-two-wastelands"
-        ]
-        self.logger.info(f"Executing Hoolamike command: {' '.join(cmd)}")
-        print(f"\n{COLOR_INFO}Executing Hoolamike for TTW Installation...{COLOR_RESET}")
-        print(f"Command: {' '.join(cmd)}")
-        print(f"{COLOR_INFO}Streaming output below. Press Ctrl+C to cancel and return to Jackify menu.{COLOR_RESET}\n")
-        try:
-            ret = subprocess.call(cmd, cwd=str(self.hoolamike_app_install_path), env=get_clean_subprocess_env())
-            if ret == 0:
-                self.logger.info("TTW installation completed successfully.")
-                print(f"\n{COLOR_SUCCESS}TTW installation completed successfully!{COLOR_RESET}")
-                input(f"{COLOR_PROMPT}Press Enter to return to the Hoolamike menu...{COLOR_RESET}")
-                return True
+            if not create_zip or create_zip.startswith('y'):
+                zip_success = self._create_ttw_mod_archive_cli(ttw_mpi_path, ttw_output_path)
+                if not zip_success:
+                    print(f"\n{COLOR_WARNING}Archive creation failed, but TTW installation completed successfully.{COLOR_RESET}")
             else:
-                self.logger.error(f"TTW installation process returned non-zero exit code: {ret}")
-                print(f"\n{COLOR_ERROR}Error: TTW installation failed with exit code {ret}.{COLOR_RESET}")
-                input(f"{COLOR_PROMPT}Press Enter to return to the Hoolamike menu...{COLOR_RESET}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Error executing Hoolamike TTW installation: {e}", exc_info=True)
-            print(f"\n{COLOR_ERROR}Error executing Hoolamike TTW installation: {e}{COLOR_RESET}")
+                print(f"\n{COLOR_INFO}Skipping archive creation. You can manually use the TTW files from the output directory.{COLOR_RESET}")
+
+            input(f"\n{COLOR_PROMPT}Press Enter to return to the Hoolamike menu...{COLOR_RESET}")
+            return True
+        else:
+            print(f"\n{COLOR_ERROR}{message}{COLOR_RESET}")
             input(f"{COLOR_PROMPT}Press Enter to return to the Hoolamike menu...{COLOR_RESET}")
             return False
 
@@ -818,26 +982,124 @@ class HoolamikeHandler:
         # Set destination variable
         ttw_config["variables"]["DESTINATION"] = str(ttw_output_path)
         
-        # Set USERPROFILE to a Jackify-managed directory for TTW
-        userprofile_path = str(self.hoolamike_app_install_path / "USERPROFILE")
+        # Set USERPROFILE to Fallout New Vegas Wine prefix Documents folder
+        userprofile_path = self._detect_fallout_nv_userprofile()
         if "variables" not in self.hoolamike_config["extras"]["tale_of_two_wastelands"]:
             self.hoolamike_config["extras"]["tale_of_two_wastelands"]["variables"] = {}
         self.hoolamike_config["extras"]["tale_of_two_wastelands"]["variables"]["USERPROFILE"] = userprofile_path
         
-        # Make sure game paths are set correctly
+        # Make sure game paths are set correctly using proper Hoolamike naming format
         for game in ['Fallout 3', 'Fallout New Vegas']:
             if game in self.game_install_paths:
-                game_key = game.replace(' ', '').lower()
-                
+                # Use _format_game_name to ensure correct naming (removes spaces)
+                formatted_game_name = self._format_game_name(game)
+
                 if "games" not in self.hoolamike_config:
                     self.hoolamike_config["games"] = {}
-                    
-                if game not in self.hoolamike_config["games"]:
-                    self.hoolamike_config["games"][game] = {}
-                    
-                self.hoolamike_config["games"][game]["root_directory"] = str(self.game_install_paths[game])
-                
+
+                if formatted_game_name not in self.hoolamike_config["games"]:
+                    self.hoolamike_config["games"][formatted_game_name] = {}
+
+                self.hoolamike_config["games"][formatted_game_name]["root_directory"] = str(self.game_install_paths[game])
+
         self.logger.info("Updated Hoolamike configuration with TTW settings.")
+
+    def _create_ttw_mod_archive_cli(self, ttw_mpi_path: Path, ttw_output_path: Path) -> bool:
+        """Create a zipped mod archive of TTW output for MO2 installation (CLI version).
+
+        Args:
+            ttw_mpi_path: Path to the TTW .mpi file (used for version extraction)
+            ttw_output_path: Path to the TTW output directory to archive
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            import shutil
+            import re
+
+            if not ttw_output_path.exists():
+                print(f"{COLOR_ERROR}Output directory does not exist: {ttw_output_path}{COLOR_RESET}")
+                return False
+
+            # Extract version from .mpi filename (e.g., "TTW v3.4.mpi" -> "3.4")
+            version_suffix = ""
+            if ttw_mpi_path:
+                mpi_filename = ttw_mpi_path.stem  # Get filename without extension
+                # Look for version pattern like "3.4", "v3.4", etc.
+                version_match = re.search(r'v?(\d+\.\d+(?:\.\d+)?)', mpi_filename, re.IGNORECASE)
+                if version_match:
+                    version_suffix = f" {version_match.group(1)}"
+
+            # Create archive filename - [NoDelete] prefix is used by MO2 workflows
+            archive_name = f"[NoDelete] Tale of Two Wastelands{version_suffix}"
+
+            # Place archive in parent directory of output
+            archive_path = ttw_output_path.parent / archive_name
+
+            print(f"\n{COLOR_INFO}Creating mod archive: {archive_name}.zip{COLOR_RESET}")
+            print(f"{COLOR_INFO}This may take several minutes...{COLOR_RESET}")
+
+            # Create the zip archive
+            # shutil.make_archive returns the path without .zip extension
+            final_archive = shutil.make_archive(
+                str(archive_path),      # base name (without extension)
+                'zip',                  # format
+                str(ttw_output_path)    # directory to archive
+            )
+
+            print(f"\n{COLOR_SUCCESS}Archive created successfully: {Path(final_archive).name}{COLOR_RESET}")
+            print(f"{COLOR_INFO}Location: {final_archive}{COLOR_RESET}")
+            print(f"{COLOR_INFO}You can now install this archive as a mod in MO2.{COLOR_RESET}")
+
+            self.logger.info(f"Created TTW mod archive: {final_archive}")
+            return True
+
+        except Exception as e:
+            print(f"\n{COLOR_ERROR}Failed to create mod archive: {e}{COLOR_RESET}")
+            self.logger.error(f"Failed to create TTW mod archive: {e}", exc_info=True)
+            return False
+
+    def _detect_fallout_nv_userprofile(self) -> str:
+        """
+        Detect the Fallout New Vegas Wine prefix Documents folder for USERPROFILE.
+        
+        Returns:
+            str: Path to the Fallout New Vegas Wine prefix Documents folder,
+                 or fallback to Jackify-managed directory if not found.
+        """
+        try:
+            # Fallout New Vegas AppID
+            fnv_appid = "22380"
+            
+            # Find the compatdata directory for Fallout New Vegas
+            compatdata_path = self.path_handler.find_compat_data(fnv_appid)
+            if not compatdata_path:
+                self.logger.warning(f"Could not find compatdata directory for Fallout New Vegas (AppID: {fnv_appid})")
+                # Fallback to Jackify-managed directory
+                fallback_path = str(self.hoolamike_app_install_path / "USERPROFILE")
+                self.logger.info(f"Using fallback USERPROFILE path: {fallback_path}")
+                return fallback_path
+            
+            # Construct the Wine prefix Documents path
+            wine_documents_path = compatdata_path / "pfx" / "drive_c" / "users" / "steamuser" / "Documents" / "My Games" / "FalloutNV"
+            
+            if wine_documents_path.exists():
+                self.logger.info(f"Found Fallout New Vegas Wine prefix Documents folder: {wine_documents_path}")
+                return str(wine_documents_path)
+            else:
+                self.logger.warning(f"Fallout New Vegas Wine prefix Documents folder not found at: {wine_documents_path}")
+                # Fallback to Jackify-managed directory
+                fallback_path = str(self.hoolamike_app_install_path / "USERPROFILE")
+                self.logger.info(f"Using fallback USERPROFILE path: {fallback_path}")
+                return fallback_path
+                
+        except Exception as e:
+            self.logger.error(f"Error detecting Fallout New Vegas USERPROFILE: {e}", exc_info=True)
+            # Fallback to Jackify-managed directory
+            fallback_path = str(self.hoolamike_app_install_path / "USERPROFILE")
+            self.logger.info(f"Using fallback USERPROFILE path: {fallback_path}")
+            return fallback_path
 
     def reset_config(self):
         """Resets the hoolamike.yaml to default settings, backing up any existing file."""
@@ -972,6 +1234,165 @@ class HoolamikeHandler:
             except Exception as e:
                 self.logger.error(f"Error launching or waiting for editor: {e}")
                 print(f"{COLOR_ERROR}An error occurred while launching the editor: {e}{COLOR_RESET}")
+
+    @staticmethod
+    def integrate_ttw_into_modlist(ttw_output_path: Path, modlist_install_dir: Path, ttw_version: str) -> bool:
+        """Integrate TTW output into a modlist's MO2 structure
+
+        This method:
+        1. Copies TTW output to the modlist's mods folder
+        2. Updates modlist.txt for all profiles
+        3. Updates plugins.txt with TTW ESMs in correct order
+
+        Args:
+            ttw_output_path: Path to TTW output directory
+            modlist_install_dir: Path to modlist installation directory
+            ttw_version: TTW version string (e.g., "3.4")
+
+        Returns:
+            bool: True if integration successful, False otherwise
+        """
+        logging_handler = LoggingHandler()
+        logging_handler.rotate_log_for_logger('ttw-install', 'TTW_Install_workflow.log')
+        logger = logging_handler.setup_logger('ttw-install', 'TTW_Install_workflow.log')
+
+        try:
+            import shutil
+            import re
+
+            # Validate paths
+            if not ttw_output_path.exists():
+                logger.error(f"TTW output path does not exist: {ttw_output_path}")
+                return False
+
+            mods_dir = modlist_install_dir / "mods"
+            profiles_dir = modlist_install_dir / "profiles"
+
+            if not mods_dir.exists() or not profiles_dir.exists():
+                logger.error(f"Invalid modlist directory structure: {modlist_install_dir}")
+                return False
+
+            # Create mod folder name with version
+            mod_folder_name = f"[NoDelete] Tale of Two Wastelands {ttw_version}" if ttw_version else "[NoDelete] Tale of Two Wastelands"
+            target_mod_dir = mods_dir / mod_folder_name
+
+            # Copy TTW output to mods directory
+            logger.info(f"Copying TTW output to {target_mod_dir}")
+            if target_mod_dir.exists():
+                logger.info(f"Removing existing TTW mod at {target_mod_dir}")
+                shutil.rmtree(target_mod_dir)
+
+            shutil.copytree(ttw_output_path, target_mod_dir)
+            logger.info("TTW output copied successfully")
+
+            # TTW ESMs in correct load order
+            ttw_esms = [
+                "Fallout3.esm",
+                "Anchorage.esm",
+                "ThePitt.esm",
+                "BrokenSteel.esm",
+                "PointLookout.esm",
+                "Zeta.esm",
+                "TaleOfTwoWastelands.esm",
+                "YUPTTW.esm"
+            ]
+
+            # Process each profile
+            for profile_dir in profiles_dir.iterdir():
+                if not profile_dir.is_dir():
+                    continue
+
+                profile_name = profile_dir.name
+                logger.info(f"Processing profile: {profile_name}")
+
+                # Update modlist.txt
+                modlist_file = profile_dir / "modlist.txt"
+                if modlist_file.exists():
+                    # Read existing modlist
+                    with open(modlist_file, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+
+                    # Find the TTW placeholder separator and insert BEFORE it
+                    separator_found = False
+                    ttw_mod_line = f"+{mod_folder_name}\n"
+                    new_lines = []
+
+                    for line in lines:
+                        # Skip existing TTW mod entries (but keep separators and other TTW-related mods)
+                        # Match patterns: "+[NoDelete] Tale of Two Wastelands", "+[NoDelete] TTW", etc.
+                        stripped = line.strip()
+                        if stripped.startswith('+') and '[nodelete]' in stripped.lower():
+                            # Check if it's the main TTW mod (not other TTW-related mods like "TTW Quick Start")
+                            if ('tale of two wastelands' in stripped.lower() and 'quick start' not in stripped.lower() and
+                                'loading wheel' not in stripped.lower()) or stripped.lower().startswith('+[nodelete] ttw '):
+                                logger.info(f"Removing existing TTW mod entry: {stripped}")
+                                continue
+
+                        # Insert TTW mod BEFORE the placeholder separator (MO2 order is bottom-up)
+                        # Check BEFORE appending so TTW mod appears before separator in file
+                        if "put tale of two wastelands mod here" in line.lower() and "_separator" in line.lower():
+                            new_lines.append(ttw_mod_line)
+                            separator_found = True
+                            logger.info(f"Inserted TTW mod before separator: {line.strip()}")
+
+                        new_lines.append(line)
+
+                    # If no separator found, append at the end
+                    if not separator_found:
+                        new_lines.append(ttw_mod_line)
+                        logger.warning(f"No TTW separator found in {profile_name}, appended to end")
+
+                    # Write back
+                    with open(modlist_file, 'w', encoding='utf-8') as f:
+                        f.writelines(new_lines)
+
+                    logger.info(f"Updated modlist.txt for {profile_name}")
+                else:
+                    logger.warning(f"modlist.txt not found for profile {profile_name}")
+
+                # Update plugins.txt
+                plugins_file = profile_dir / "plugins.txt"
+                if plugins_file.exists():
+                    # Read existing plugins
+                    with open(plugins_file, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+
+                    # Remove any existing TTW ESMs
+                    ttw_esm_set = set(esm.lower() for esm in ttw_esms)
+                    lines = [line for line in lines if line.strip().lower() not in ttw_esm_set]
+
+                    # Find CaravanPack.esm and insert TTW ESMs after it
+                    insert_index = None
+                    for i, line in enumerate(lines):
+                        if line.strip().lower() == "caravanpack.esm":
+                            insert_index = i + 1
+                            break
+
+                    if insert_index is not None:
+                        # Insert TTW ESMs in correct order
+                        for esm in reversed(ttw_esms):
+                            lines.insert(insert_index, f"{esm}\n")
+                    else:
+                        logger.warning(f"CaravanPack.esm not found in {profile_name}, appending TTW ESMs to end")
+                        for esm in ttw_esms:
+                            lines.append(f"{esm}\n")
+
+                    # Write back
+                    with open(plugins_file, 'w', encoding='utf-8') as f:
+                        f.writelines(lines)
+
+                    logger.info(f"Updated plugins.txt for {profile_name}")
+                else:
+                    logger.warning(f"plugins.txt not found for profile {profile_name}")
+
+            logger.info("TTW integration completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to integrate TTW into modlist: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
 
 # Example usage (for testing, remove later)
 if __name__ == '__main__':

@@ -412,6 +412,9 @@ class ConfigureExistingModlistScreen(QWidget):
             pass
 
     def validate_and_start_configure(self):
+        # Reload config to pick up any settings changes made in Settings dialog
+        self.config_handler.reload_config()
+
         # Rotate log file at start of each workflow run (keep 5 backups)
         from jackify.backend.handlers.logging_handler import LoggingHandler
         from pathlib import Path
@@ -453,10 +456,14 @@ class ConfigureExistingModlistScreen(QWidget):
 
     def start_workflow(self, modlist_name, install_dir, resolution):
         """Start the configuration workflow using backend service directly"""
+        # CRITICAL: Reload config from disk to pick up any settings changes from Settings dialog
+        # This ensures Proton version and winetricks settings are current
+        self.config_handler._load_config()
+
         try:
             # Start time tracking
             self._workflow_start_time = time.time()
-            
+
             self._safe_append_text("[Jackify] Starting post-install configuration...")
             
             # Create configuration thread using backend service

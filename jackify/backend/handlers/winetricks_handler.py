@@ -291,6 +291,9 @@ class WinetricksHandler:
 
         # For non-dotnet40 installations, install all components together (faster)
         max_attempts = 3
+        winetricks_failed = False
+        last_error_details = None
+
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
                 self.logger.warning(f"Retrying component installation (attempt {attempt}/{max_attempts})...")
@@ -301,9 +304,40 @@ class WinetricksHandler:
                 cmd = [self.winetricks_path, '--unattended'] + components_to_install
 
                 self.logger.debug(f"Running: {' '.join(cmd)}")
-                self.logger.debug(f"Environment WINE={env.get('WINE', 'NOT SET')}")
-                self.logger.debug(f"Environment DISPLAY={env.get('DISPLAY', 'NOT SET')}")
-                self.logger.debug(f"Environment WINEPREFIX={env.get('WINEPREFIX', 'NOT SET')}")
+
+                # Enhanced diagnostics for bundled winetricks
+                self.logger.debug("=== Winetricks Environment Diagnostics ===")
+                self.logger.debug(f"Bundled winetricks path: {self.winetricks_path}")
+                self.logger.debug(f"Winetricks exists: {os.path.exists(self.winetricks_path)}")
+                self.logger.debug(f"Winetricks executable: {os.access(self.winetricks_path, os.X_OK)}")
+                if os.path.exists(self.winetricks_path):
+                    try:
+                        winetricks_stat = os.stat(self.winetricks_path)
+                        self.logger.debug(f"Winetricks permissions: {oct(winetricks_stat.st_mode)}")
+                        self.logger.debug(f"Winetricks size: {winetricks_stat.st_size} bytes")
+                    except Exception as stat_err:
+                        self.logger.debug(f"Could not stat winetricks: {stat_err}")
+
+                self.logger.debug(f"WINE binary: {env.get('WINE', 'NOT SET')}")
+                wine_binary = env.get('WINE', '')
+                if wine_binary and os.path.exists(wine_binary):
+                    self.logger.debug(f"WINE binary exists: True")
+                else:
+                    self.logger.debug(f"WINE binary exists: False")
+
+                self.logger.debug(f"WINEPREFIX: {env.get('WINEPREFIX', 'NOT SET')}")
+                wineprefix = env.get('WINEPREFIX', '')
+                if wineprefix and os.path.exists(wineprefix):
+                    self.logger.debug(f"WINEPREFIX exists: True")
+                    self.logger.debug(f"WINEPREFIX/pfx exists: {os.path.exists(os.path.join(wineprefix, 'pfx'))}")
+                else:
+                    self.logger.debug(f"WINEPREFIX exists: False")
+
+                self.logger.debug(f"DISPLAY: {env.get('DISPLAY', 'NOT SET')}")
+                self.logger.debug(f"WINETRICKS_CACHE: {env.get('WINETRICKS_CACHE', 'NOT SET')}")
+                self.logger.debug(f"Components to install: {components_to_install}")
+                self.logger.debug("==========================================")
+
                 result = subprocess.run(
                     cmd,
                     env=env,
@@ -337,14 +371,92 @@ class WinetricksHandler:
                             except Exception as e:
                                 self.logger.warning(f"Could not read winetricks.log: {e}")
 
+                    # Store detailed error information for fallback diagnostics
+                    last_error_details = {
+                        'returncode': result.returncode,
+                        'stdout': result.stdout.strip(),
+                        'stderr': result.stderr.strip(),
+                        'attempt': attempt
+                    }
+
                     self.logger.error(f"Winetricks command failed (Attempt {attempt}/{max_attempts}). Return Code: {result.returncode}")
                     self.logger.error(f"Stdout: {result.stdout.strip()}")
                     self.logger.error(f"Stderr: {result.stderr.strip()}")
 
+                    # Enhanced error diagnostics with actionable information
+                    stderr_lower = result.stderr.lower()
+                    stdout_lower = result.stdout.lower()
+
+                    if "command not found" in stderr_lower or "no such file" in stderr_lower:
+                        self.logger.error("DIAGNOSTIC: Winetricks or dependency binary not found")
+                        self.logger.error("  - Bundled winetricks may be missing dependencies")
+                        self.logger.error("  - Will attempt protontricks fallback if all attempts fail")
+                    elif "permission denied" in stderr_lower:
+                        self.logger.error("DIAGNOSTIC: Permission issue detected")
+                        self.logger.error(f"  - Check permissions on: {self.winetricks_path}")
+                        self.logger.error(f"  - Check permissions on WINEPREFIX: {env.get('WINEPREFIX', 'N/A')}")
+                    elif "timeout" in stderr_lower:
+                        self.logger.error("DIAGNOSTIC: Timeout issue detected during component download/install")
+                    elif "sha256sum mismatch" in stderr_lower or "sha256sum" in stdout_lower:
+                        self.logger.error("DIAGNOSTIC: Checksum verification failed")
+                        self.logger.error("  - Component download may be corrupted")
+                        self.logger.error("  - Network issue or upstream file change")
+                    elif "curl" in stderr_lower or "wget" in stderr_lower:
+                        self.logger.error("DIAGNOSTIC: Download tool (curl/wget) issue")
+                        self.logger.error("  - Network connectivity problem or missing download tool")
+                    elif "cabextract" in stderr_lower:
+                        self.logger.error("DIAGNOSTIC: cabextract missing or failed")
+                        self.logger.error("  - Required for extracting Windows cabinet files")
+                    elif "unzip" in stderr_lower:
+                        self.logger.error("DIAGNOSTIC: unzip missing or failed")
+                        self.logger.error("  - Required for extracting zip archives")
+                    else:
+                        self.logger.error("DIAGNOSTIC: Unknown winetricks failure")
+                        self.logger.error("  - Check full logs for details")
+                        self.logger.error("  - Will attempt protontricks fallback if all attempts fail")
+
+                    winetricks_failed = True
+
+            except subprocess.TimeoutExpired as e:
+                self.logger.error(f"Winetricks timed out (Attempt {attempt}/{max_attempts}): {e}")
+                last_error_details = {'error': 'timeout', 'attempt': attempt}
+                winetricks_failed = True
             except Exception as e:
                 self.logger.error(f"Error during winetricks run (Attempt {attempt}/{max_attempts}): {e}", exc_info=True)
+                last_error_details = {'error': str(e), 'attempt': attempt}
+                winetricks_failed = True
 
-        self.logger.error(f"Failed to install Wine components after {max_attempts} attempts.")
+        # All winetricks attempts failed - try automatic fallback to protontricks
+        if winetricks_failed:
+            self.logger.error(f"Winetricks failed after {max_attempts} attempts.")
+
+            # Check if protontricks is available for fallback
+            try:
+                protontricks_check = subprocess.run(['which', 'protontricks'],
+                                                   capture_output=True, text=True, timeout=5)
+                if protontricks_check.returncode == 0:
+                    self.logger.warning("=" * 80)
+                    self.logger.warning("AUTOMATIC FALLBACK: Winetricks failed, attempting protontricks fallback...")
+                    self.logger.warning(f"Last winetricks error: {last_error_details}")
+                    self.logger.warning("=" * 80)
+
+                    # Attempt fallback to protontricks
+                    fallback_success = self._install_components_protontricks_only(components_to_install, wineprefix, game_var)
+
+                    if fallback_success:
+                        self.logger.info("SUCCESS: Protontricks fallback succeeded where winetricks failed")
+                        return True
+                    else:
+                        self.logger.error("FAILURE: Both winetricks and protontricks fallback failed")
+                        return False
+                else:
+                    self.logger.error("Protontricks not available for fallback")
+                    self.logger.error(f"Final winetricks error details: {last_error_details}")
+                    return False
+            except Exception as e:
+                self.logger.error(f"Could not check for protontricks fallback: {e}")
+                return False
+
         return False
 
     def _reorder_components_for_installation(self, components: list) -> list:

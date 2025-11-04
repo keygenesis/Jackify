@@ -6,7 +6,7 @@ Extracted from src.modules.menu_handler.MenuHandler.show_additional_tasks_menu()
 import time
 
 from jackify.shared.colors import (
-    COLOR_SELECTION, COLOR_RESET, COLOR_ACTION, COLOR_PROMPT, COLOR_INFO, COLOR_DISABLED
+    COLOR_SELECTION, COLOR_RESET, COLOR_ACTION, COLOR_PROMPT, COLOR_INFO, COLOR_DISABLED, COLOR_WARNING
 )
 from jackify.shared.ui_utils import print_jackify_banner, print_section_header, clear_screen
 
@@ -24,29 +24,26 @@ class AdditionalMenuHandler:
         clear_screen()
     
     def show_additional_tasks_menu(self, cli_instance):
-        """Show the MO2, NXM Handling & Recovery submenu"""
+        """Show the Additional Tasks & Tools submenu"""
         while True:
             self._clear_screen()
             print_jackify_banner()
-            print_section_header("Additional Utilities")  # Broader title
-            
-            print(f"{COLOR_SELECTION}1.{COLOR_RESET} Install Mod Organizer 2 (Base Setup)")
-            print(f"   {COLOR_ACTION}→ Proton setup for a standalone MO2 instance{COLOR_RESET}")
-            print(f"{COLOR_SELECTION}2.{COLOR_RESET} Configure NXM Handling {COLOR_DISABLED}(Not Implemented){COLOR_RESET}")
-            print(f"{COLOR_SELECTION}3.{COLOR_RESET} Jackify Recovery Tools")
-            print(f"   {COLOR_ACTION}→ Restore files modified or backed up by Jackify{COLOR_RESET}")
+            print_section_header("Additional Tasks & Tools")
+            print(f"{COLOR_INFO}Additional Tasks & Tools, such as TTW Installation{COLOR_RESET}\n")
+
+            print(f"{COLOR_SELECTION}1.{COLOR_RESET} Tale of Two Wastelands (TTW) Installation")
+            print(f"   {COLOR_ACTION}→ Install TTW using Hoolamike native automation{COLOR_RESET}")
+            print(f"{COLOR_SELECTION}2.{COLOR_RESET} Coming Soon...")
             print(f"{COLOR_SELECTION}0.{COLOR_RESET} Return to Main Menu")
-            selection = input(f"\n{COLOR_PROMPT}Enter your selection (0-3): {COLOR_RESET}").strip()
+            selection = input(f"\n{COLOR_PROMPT}Enter your selection (0-2): {COLOR_RESET}").strip()
             
             if selection.lower() == 'q':  # Allow 'q' to re-display menu
                 continue
             if selection == "1":
-                self._execute_legacy_install_mo2(cli_instance)
+                self._execute_hoolamike_ttw_install(cli_instance)
             elif selection == "2":
-                print(f"{COLOR_INFO}Configure NXM Handling is not yet implemented.{COLOR_RESET}")
-                input("\nPress Enter to return to the Utilities menu...")
-            elif selection == "3":
-                self._execute_legacy_recovery_menu(cli_instance)
+                print(f"\n{COLOR_INFO}More features coming soon!{COLOR_RESET}")
+                input("\nPress Enter to return to menu...")
             elif selection == "0":
                 break
             else:
@@ -69,4 +66,59 @@ class AdditionalMenuHandler:
         
         recovery_handler = RecoveryMenuHandler()
         recovery_handler.logger = self.logger
-        recovery_handler.show_recovery_menu(cli_instance) 
+        recovery_handler.show_recovery_menu(cli_instance)
+
+    def _execute_hoolamike_ttw_install(self, cli_instance):
+        """Execute TTW installation using Hoolamike handler"""
+        from ....backend.handlers.hoolamike_handler import HoolamikeHandler
+        from ....backend.models.configuration import SystemInfo
+        from ....shared.colors import COLOR_ERROR
+
+        system_info = SystemInfo(is_steamdeck=cli_instance.system_info.is_steamdeck)
+        hoolamike_handler = HoolamikeHandler(
+            steamdeck=system_info.is_steamdeck,
+            verbose=cli_instance.verbose,
+            filesystem_handler=cli_instance.filesystem_handler,
+            config_handler=cli_instance.config_handler,
+            menu_handler=cli_instance.menu_handler
+        )
+
+        # First check if Hoolamike is installed
+        if not hoolamike_handler.hoolamike_installed:
+            print(f"\n{COLOR_WARNING}Hoolamike is not installed. Installing Hoolamike first...{COLOR_RESET}")
+            if not hoolamike_handler.install_update_hoolamike():
+                print(f"{COLOR_ERROR}Failed to install Hoolamike. Cannot proceed with TTW installation.{COLOR_RESET}")
+                input("Press Enter to return to menu...")
+                return
+
+        # Run TTW installation workflow
+        print(f"\n{COLOR_INFO}Starting TTW installation workflow...{COLOR_RESET}")
+        result = hoolamike_handler.install_ttw()
+        if result is None:
+            print(f"\n{COLOR_WARNING}TTW installation returned without result.{COLOR_RESET}")
+            input("Press Enter to return to menu...")
+
+    def _execute_hoolamike_modlist_install(self, cli_instance):
+        """Execute modlist installation using Hoolamike handler"""
+        from ....backend.handlers.hoolamike_handler import HoolamikeHandler
+        from ....backend.models.configuration import SystemInfo
+
+        system_info = SystemInfo(is_steamdeck=cli_instance.system_info.is_steamdeck)
+        hoolamike_handler = HoolamikeHandler(
+            steamdeck=system_info.is_steamdeck,
+            verbose=cli_instance.verbose,
+            filesystem_handler=cli_instance.filesystem_handler,
+            config_handler=cli_instance.config_handler,
+            menu_handler=cli_instance.menu_handler
+        )
+
+        # First check if Hoolamike is installed
+        if not hoolamike_handler.hoolamike_installed:
+            print(f"\n{COLOR_WARNING}Hoolamike is not installed. Installing Hoolamike first...{COLOR_RESET}")
+            if not hoolamike_handler.install_update_hoolamike():
+                print(f"{COLOR_ERROR}Failed to install Hoolamike. Cannot proceed with modlist installation.{COLOR_RESET}")
+                input("Press Enter to return to menu...")
+                return
+
+        # Run modlist installation
+        hoolamike_handler.install_modlist() 

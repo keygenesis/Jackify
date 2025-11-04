@@ -1,5 +1,30 @@
 # Jackify Changelog
 
+## v0.1.7 - TTW Automation & Bug Fixes
+**Release Date:** November 1, 2025
+
+### Major Features
+- **TTW (Tale of Two Wastelands) Installation and Automation**
+  - TTW Installation function using Hoolamike application - https://github.com/Niedzwiedzw/hoolamike
+  - Automated workflow for TTW installation and integration into FNV modlists, where possible
+  - Automatic detection of TTW-compatible modlists
+  - User prompt after modlist installation with option to install TTW
+  - Automated integration: file copying, load order updates, modlist.txt updates
+  - Available in both CLI and GUI workflows
+
+### Bug Fixes
+- **Registry UTF-8 Decode Error**: Fixed crash during dotnet4.x installation when Wine outputs binary data
+- **Python 3.10 Compatibility**: Fixed startup crash on Python 3.10 systems
+- **TTW Steam Deck Layout**: Fixed window sizing issues on Steam Deck when entering/exiting TTW screen
+- **TTW Integration Status**: Added visible status banner updates during modlist integration for collapsed mode
+- **TTW Accidental Input Protection**: Added 3-second countdown to TTW installation prompt to prevent accidental dismissal
+- **Settings Persistence**: Settings changes now persist correctly across workflows
+- **Steam Deck Keyboard Input**: Fixed keyboard input failure on Steam Deck
+- **Application Close Crash**: Fixed crash when closing application on Steam Deck
+- **Winetricks Diagnostics**: Enhanced error detection with automatic fallback
+
+---
+
 ## v0.1.6.6 - AppImage Bundling Fix
 **Release Date:** October 29, 2025
 

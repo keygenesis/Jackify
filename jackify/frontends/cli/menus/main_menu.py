@@ -42,36 +42,17 @@ class MainMenuHandler:
             print(f"{COLOR_SELECTION}{'-'*22}{COLOR_RESET}")  # Standard separator
             print(f"{COLOR_SELECTION}1.{COLOR_RESET} Modlist Tasks")
             print(f"   {COLOR_ACTION}→ Install & Configure Modlists{COLOR_RESET}")
-            print(f"{COLOR_SELECTION}2.{COLOR_RESET} Coming Soon...")
-            print(f"   {COLOR_ACTION}→ More features coming in future releases{COLOR_RESET}")
-            if self.dev_mode:
-                print(f"{COLOR_SELECTION}3.{COLOR_RESET} Hoolamike Tasks")
-                print(f"   {COLOR_ACTION}→ Wabbajack alternative: Install Modlists, TTW, etc{COLOR_RESET}")
-                print(f"{COLOR_SELECTION}4.{COLOR_RESET} Additional Tasks")
-                print(f"   {COLOR_ACTION}→ Install Wabbajack (via WINE), MO2, NXM Handling, Jackify Recovery{COLOR_RESET}")
+            print(f"{COLOR_SELECTION}2.{COLOR_RESET} Additional Tasks & Tools")
+            print(f"   {COLOR_ACTION}→ TTW automation, Wabbajack via Wine, MO2, NXM Handling, Recovery{COLOR_RESET}")
             print(f"{COLOR_SELECTION}0.{COLOR_RESET} Exit Jackify")
-            if self.dev_mode:
-                choice = input(f"\n{COLOR_PROMPT}Enter your selection (0-4): {COLOR_RESET}").strip()
-            else:
-                choice = input(f"\n{COLOR_PROMPT}Enter your selection (0-2): {COLOR_RESET}").strip()
+            choice = input(f"\n{COLOR_PROMPT}Enter your selection (0-2): {COLOR_RESET}").strip()
             
             if choice.lower() == 'q':  # Allow 'q' to re-display menu
                 continue
             if choice == "1":
                 return "wabbajack"
             elif choice == "2":
-                # Additional features are coming in future releases
-                print(f"\n{COLOR_PROMPT}Coming Soon!{COLOR_RESET}")
-                print(f"More features will be added in future releases.")
-                print(f"Please use 'Modlist Tasks' for all current functionality.")
-                print(f"Press Enter to continue...")
-                input()
-                continue  # Return to main menu
-            if self.dev_mode:
-                if choice == "3":
-                    return "hoolamike"
-                elif choice == "4":
-                    return "additional"
+                return "additional"
             elif choice == "0":
                 return "exit"
             else:

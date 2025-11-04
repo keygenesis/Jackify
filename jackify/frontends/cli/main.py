@@ -451,10 +451,8 @@ class JackifyCLI:
                 elif choice == "wabbajack":
                     self.menus['wabbajack'].show_wabbajack_tasks_menu(self)
                 # HIDDEN FOR FIRST RELEASE - UNCOMMENT WHEN READY
-                # elif choice == "hoolamike":
-                #     self.menus['hoolamike'].show_hoolamike_menu(self)
-                # elif choice == "additional":
-                #     self.menus['additional'].show_additional_tasks_menu(self)
+                elif choice == "additional":
+                    self.menus['additional'].show_additional_tasks_menu(self)
                 else:
                     logger.warning(f"Invalid choice '{choice}' received from show_main_menu.")
                     

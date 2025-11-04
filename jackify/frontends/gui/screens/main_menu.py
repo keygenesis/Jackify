@@ -47,12 +47,9 @@ class MainMenu(QWidget):
         button_height = 60
         MENU_ITEMS = [
             ("Modlist Tasks", "modlist_tasks", "Manage your modlists with native Linux tools"),
-            ("Coming Soon...", "coming_soon", "More features coming soon!"),
+            ("Additional Tasks", "additional_tasks", "Additional Tasks & Tools, such as TTW Installation"),
+            ("Exit Jackify", "exit_jackify", "Close the application"),
         ]
-        if self.dev_mode:
-            MENU_ITEMS.append(("Hoolamike Tasks", "hoolamike_tasks", "Manage Hoolamike modding tools"))
-            MENU_ITEMS.append(("Additional Tasks", "additional_tasks", "Additional utilities and tools"))
-        MENU_ITEMS.append(("Exit Jackify", "exit_jackify", "Close the application"))
         
         for label, action_id, description in MENU_ITEMS:
             # Main button
@@ -121,8 +118,10 @@ class MainMenu(QWidget):
             msg.exec()
         elif action_id == "modlist_tasks" and self.stacked_widget:
             self.stacked_widget.setCurrentIndex(2)
+        elif action_id == "additional_tasks" and self.stacked_widget:
+            self.stacked_widget.setCurrentIndex(3)
         elif action_id == "return_main_menu":
             # This is the main menu, so do nothing
             pass
         elif self.stacked_widget:
-            self.stacked_widget.setCurrentIndex(2)  # Placeholder for now 
+            self.stacked_widget.setCurrentIndex(1)  # Default to placeholder 

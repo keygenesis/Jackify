@@ -9,6 +9,21 @@ ANSI_COLOR_MAP = {
 }
 ANSI_RE = re.compile(r'\x1b\[(\d+)(;\d+)?m')
 
+# Pattern to match terminal control codes (cursor movement, line clearing, etc.)
+ANSI_CONTROL_RE = re.compile(
+    r'\x1b\['  # CSI sequence start
+    r'[0-9;]*'  # Parameters
+    r'[A-Za-z]'  # Command letter
+)
+
+def strip_ansi_control_codes(text):
+    """Remove ALL ANSI escape sequences including control codes.
+
+    This is useful for Hoolamike output which uses terminal control codes
+    for progress bars that don't render well in QTextEdit.
+    """
+    return ANSI_CONTROL_RE.sub('', text)
+
 def ansi_to_html(text):
     """Convert ANSI color codes to HTML"""
     result = ''

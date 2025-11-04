@@ -554,6 +554,9 @@ class ConfigureNewModlistScreen(QWidget):
             return True  # Continue anyway
 
     def validate_and_start_configure(self):
+        # Reload config to pick up any settings changes made in Settings dialog
+        self.config_handler.reload_config()
+
         # Check protontricks before proceeding
         if not self._check_protontricks():
             return
@@ -665,6 +668,10 @@ class ConfigureNewModlistScreen(QWidget):
             MessageService.critical(self, "Steam Restart Failed", "Failed to restart Steam automatically. Please restart Steam manually, then try again.", safety_level="medium")
 
     def configure_modlist(self):
+        # CRITICAL: Reload config from disk to pick up any settings changes from Settings dialog
+        # This ensures Proton version and winetricks settings are current
+        self.config_handler._load_config()
+
         install_dir = os.path.dirname(self.install_dir_edit.text().strip()) if self.install_dir_edit.text().strip().endswith('ModOrganizer.exe') else self.install_dir_edit.text().strip()
         modlist_name = self.modlist_name_edit.text().strip()
         mo2_exe_path = self.install_dir_edit.text().strip()
@@ -672,12 +679,12 @@ class ConfigureNewModlistScreen(QWidget):
         if not install_dir or not modlist_name:
             MessageService.warning(self, "Missing Info", "Install directory or modlist name is missing.", safety_level="low")
             return
-        
+
         # Use automated prefix service instead of manual steps
         self._safe_append_text("")
         self._safe_append_text("=== Steam Integration Phase ===")
         self._safe_append_text("Starting automated Steam setup workflow...")
-        
+
         # Start automated prefix workflow
         self._start_automated_prefix_workflow(modlist_name, install_dir, mo2_exe_path, resolution)
 

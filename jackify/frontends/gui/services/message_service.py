@@ -220,6 +220,8 @@ class MessageService:
             msg_box = MessageService._create_base_message_box(parent, critical, safety_level)
             msg_box.setIcon(QMessageBox.Information)
             msg_box.setWindowTitle(title)
+            msg_box.setTextFormat(Qt.RichText)
+            msg_box.setTextInteractionFlags(Qt.TextBrowserInteraction)
             msg_box.setText(message)
             msg_box.setStandardButtons(buttons)
             msg_box.setDefaultButton(default_button)

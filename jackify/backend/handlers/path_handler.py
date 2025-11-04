@@ -676,10 +676,10 @@ class PathHandler:
         
         # For each library path, look for each target game
         for library_path in library_paths:
-            # Check if the common directory exists
-            common_dir = library_path / "common"
+            # Check if the common directory exists (games are in steamapps/common)
+            common_dir = library_path / "steamapps" / "common"
             if not common_dir.is_dir():
-                logger.debug(f"No 'common' directory in library: {library_path}")
+                logger.debug(f"No 'steamapps/common' directory in library: {library_path}")
                 continue
             
             # Get subdirectories in common dir
@@ -694,8 +694,8 @@ class PathHandler:
                 if game_name in results:
                     continue  # Already found this game
                 
-                # Try to find by appmanifest
-                appmanifest_path = library_path / f"appmanifest_{app_id}.acf"
+                # Try to find by appmanifest (manifests are in steamapps subdirectory)
+                appmanifest_path = library_path / "steamapps" / f"appmanifest_{app_id}.acf"
                 if appmanifest_path.is_file():
                     # Find the installdir value
                     try:
@@ -799,7 +799,8 @@ class PathHandler:
                 match = re.match(sdcard_pattern, existing_game_path)
                 if match:
                     stripped_path = match.group(1)  # Just the /Games/... part
-                    new_gamepath_value = f"D:\\\\{stripped_path.replace('/', '\\\\')}"
+                    windows_path = stripped_path.replace('/', '\\\\')
+                    new_gamepath_value = f"D:\\\\{windows_path}"
                     new_gamepath_line = f"gamePath = @ByteArray({new_gamepath_value})\n"
 
                     logger.info(f"Updating gamePath for SD card: {lines[gamepath_line_index].strip()} -> {new_gamepath_line.strip()}")

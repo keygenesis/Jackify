@@ -909,17 +909,23 @@ class JackifyMainWindow(QMainWindow):
         
         # Create screens using refactored codebase
         from jackify.frontends.gui.screens import (
-            MainMenu, ModlistTasksScreen,
+            MainMenu, ModlistTasksScreen, AdditionalTasksScreen,
             InstallModlistScreen, ConfigureNewModlistScreen, ConfigureExistingModlistScreen
         )
+        from jackify.frontends.gui.screens.install_ttw import InstallTTWScreen
         
         self.main_menu = MainMenu(stacked_widget=self.stacked_widget, dev_mode=dev_mode)
         self.feature_placeholder = FeaturePlaceholder(stacked_widget=self.stacked_widget)
         
         self.modlist_tasks_screen = ModlistTasksScreen(
-            stacked_widget=self.stacked_widget, 
+            stacked_widget=self.stacked_widget,
             main_menu_index=0,
             dev_mode=dev_mode
+        )
+        self.additional_tasks_screen = AdditionalTasksScreen(
+            stacked_widget=self.stacked_widget,
+            main_menu_index=0,
+            system_info=self.system_info
         )
         self.install_modlist_screen = InstallModlistScreen(
             stacked_widget=self.stacked_widget,
@@ -933,14 +939,26 @@ class JackifyMainWindow(QMainWindow):
             stacked_widget=self.stacked_widget,
             main_menu_index=0
         )
+        self.install_ttw_screen = InstallTTWScreen(
+            stacked_widget=self.stacked_widget,
+            main_menu_index=0,
+            system_info=self.system_info
+        )
+        # Let TTW screen request window resize for expand/collapse
+        try:
+            self.install_ttw_screen.resize_request.connect(self._on_child_resize_request)
+        except Exception:
+            pass
         
         # Add screens to stacked widget
         self.stacked_widget.addWidget(self.main_menu)           # Index 0: Main Menu
         self.stacked_widget.addWidget(self.feature_placeholder) # Index 1: Placeholder
         self.stacked_widget.addWidget(self.modlist_tasks_screen)  # Index 2: Modlist Tasks
-        self.stacked_widget.addWidget(self.install_modlist_screen)        # Index 3: Install Modlist
-        self.stacked_widget.addWidget(self.configure_new_modlist_screen)  # Index 4: Configure New
-        self.stacked_widget.addWidget(self.configure_existing_modlist_screen)  # Index 5: Configure Existing
+        self.stacked_widget.addWidget(self.additional_tasks_screen)  # Index 3: Additional Tasks
+        self.stacked_widget.addWidget(self.install_modlist_screen)        # Index 4: Install Modlist
+        self.stacked_widget.addWidget(self.install_ttw_screen)            # Index 5: Install TTW
+        self.stacked_widget.addWidget(self.configure_new_modlist_screen)  # Index 6: Configure New
+        self.stacked_widget.addWidget(self.configure_existing_modlist_screen)  # Index 7: Configure Existing
         
         # Add debug tracking for screen changes
         self.stacked_widget.currentChanged.connect(self._debug_screen_change)
@@ -1025,9 +1043,11 @@ class JackifyMainWindow(QMainWindow):
             0: "Main Menu",
             1: "Feature Placeholder",
             2: "Modlist Tasks Menu",
-            3: "Install Modlist Screen",
-            4: "Configure New Modlist",
-            5: "Configure Existing Modlist"
+            3: "Additional Tasks Menu",
+            4: "Install Modlist Screen",
+            5: "Install TTW Screen",
+            6: "Configure New Modlist",
+            7: "Configure Existing Modlist"
         }
         screen_name = screen_names.get(index, f"Unknown Screen (Index {index})")
         widget = self.stacked_widget.widget(index)
@@ -1179,6 +1199,80 @@ class JackifyMainWindow(QMainWindow):
             print(f"[ERROR] Exception in open_about_dialog: {e}")
             import traceback
             traceback.print_exc()
+
+    def _on_child_resize_request(self, mode: str):
+        debug_print(f"DEBUG: _on_child_resize_request called with mode='{mode}', current_size={self.size()}")
+        # On Steam Deck we keep the stable, full-size layout and ignore child resize
+        try:
+            if self.system_info and self.system_info.is_steamdeck:
+                debug_print("DEBUG: Steam Deck detected, ignoring resize request")
+                # Hide the checkbox if present (Deck uses full layout)
+                try:
+                    if hasattr(self, 'install_ttw_screen') and self.install_ttw_screen.show_details_checkbox:
+                        self.install_ttw_screen.show_details_checkbox.setVisible(False)
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+
+        # Ensure we can actually resize
+        self.showNormal()
+        self.setMaximumHeight(16777215)
+        debug_print(f"DEBUG: Set max height to unlimited, current_size={self.size()}")
+
+        if mode == 'expand':
+            # Restore a sensible minimum and expand height
+            min_width = max(1200, self.minimumWidth())
+            min_height = 900
+            debug_print(f"DEBUG: Expand mode - min_width={min_width}, min_height={min_height}")
+            try:
+                from PySide6.QtCore import QSize
+                self.setMinimumSize(QSize(min_width, min_height))
+            except Exception:
+                self.setMinimumSize(min_width, min_height)
+            # Animate to target height
+            target_height = max(self.size().height(), min_height)
+            self._animate_height(target_height)
+        else:
+            # Collapse to compact height computed from the TTW screen's sizeHint
+            try:
+                content_hint = self.install_ttw_screen.sizeHint().height()
+            except Exception:
+                content_hint = 460
+            compact_height = max(440, min(560, content_hint + 20))
+            debug_print(f"DEBUG: Collapse mode - content_hint={content_hint}, compact_height={compact_height}")
+            from PySide6.QtCore import QSize
+            self.setMaximumHeight(compact_height)
+            self.setMinimumSize(QSize(max(1200, self.minimumWidth()), compact_height))
+            # Animate to compact height
+            self._animate_height(compact_height)
+            
+    def _animate_height(self, target_height: int, duration_ms: int = 180):
+        """Smoothly animate the window height to target_height.
+
+        Kept local imports to minimize global impact and avoid touching module headers.
+        """
+        try:
+            from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect
+        except Exception:
+            # Fallback to immediate resize if animation types are unavailable
+            before = self.size()
+            self.resize(self.size().width(), target_height)
+            debug_print(f"DEBUG: Animated fallback resize from {before} to {self.size()}")
+            return
+
+        # Build end rect with same x/y/width and target height
+        start_rect = self.geometry()
+        end_rect = QRect(start_rect.x(), start_rect.y(), start_rect.width(), target_height)
+
+        # Hold reference to avoid GC stopping the animation
+        self._resize_anim = QPropertyAnimation(self, b"geometry")
+        self._resize_anim.setDuration(duration_ms)
+        self._resize_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._resize_anim.setStartValue(start_rect)
+        self._resize_anim.setEndValue(end_rect)
+        self._resize_anim.start()
 
 
 def resource_path(relative_path):

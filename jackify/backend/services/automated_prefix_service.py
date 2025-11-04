@@ -3020,7 +3020,7 @@ echo Prefix creation complete.
                 '/v', 'mscoree', '/t', 'REG_SZ', '/d', 'native', '/f'
             ]
 
-            result1 = subprocess.run(cmd1, env=env, capture_output=True, text=True)
+            result1 = subprocess.run(cmd1, env=env, capture_output=True, text=True, errors='replace')
             if result1.returncode == 0:
                 logger.info("Successfully applied mscoree=native DLL override")
             else:
@@ -3035,7 +3035,7 @@ echo Prefix creation complete.
                 '/v', 'OnlyUseLatestCLR', '/t', 'REG_DWORD', '/d', '1', '/f'
             ]
 
-            result2 = subprocess.run(cmd2, env=env, capture_output=True, text=True)
+            result2 = subprocess.run(cmd2, env=env, capture_output=True, text=True, errors='replace')
             if result2.returncode == 0:
                 logger.info("Successfully applied OnlyUseLatestCLR=1 registry entry")
             else:

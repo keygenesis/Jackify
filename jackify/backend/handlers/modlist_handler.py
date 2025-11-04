@@ -689,25 +689,6 @@ class ModlistHandler:
             return False
         self.logger.info("Step 3: Curated user.reg.modlist and system.reg.modlist applied successfully.")
 
-        # Step 3.5: Apply universal dotnet4.x compatibility registry fixes
-        if status_callback:
-            status_callback(f"{self._get_progress_timestamp()} Applying universal dotnet4.x compatibility fixes")
-        self.logger.info("Step 3.5: Applying universal dotnet4.x compatibility registry fixes...")
-        registry_success = False
-        try:
-            registry_success = self._apply_universal_dotnet_fixes()
-        except Exception as e:
-            self.logger.error(f"CRITICAL: Registry fixes failed - modlist may have .NET compatibility issues: {e}")
-            registry_success = False
-
-        if not registry_success:
-            self.logger.error("=" * 80)
-            self.logger.error("WARNING: Universal dotnet4.x registry fixes FAILED!")
-            self.logger.error("This modlist may experience .NET Framework compatibility issues.")
-            self.logger.error("Consider manually setting mscoree=native in winecfg if problems occur.")
-            self.logger.error("=" * 80)
-            # Continue but user should be aware of potential issues
-
         # Step 4: Install Wine Components
         if status_callback:
             status_callback(f"{self._get_progress_timestamp()} Installing Wine components (this may take a while)")
@@ -750,6 +731,26 @@ class ModlistHandler:
             print("Error: Failed to install necessary Wine components.")
             return False
         self.logger.info("Step 4: Installing Wine components... Done")
+
+        # Step 4.5: Apply universal dotnet4.x compatibility registry fixes AFTER wine components
+        # This ensures the fixes are not overwritten by component installation processes
+        if status_callback:
+            status_callback(f"{self._get_progress_timestamp()} Applying universal dotnet4.x compatibility fixes")
+        self.logger.info("Step 4.5: Applying universal dotnet4.x compatibility registry fixes...")
+        registry_success = False
+        try:
+            registry_success = self._apply_universal_dotnet_fixes()
+        except Exception as e:
+            self.logger.error(f"CRITICAL: Registry fixes failed - modlist may have .NET compatibility issues: {e}")
+            registry_success = False
+
+        if not registry_success:
+            self.logger.error("=" * 80)
+            self.logger.error("WARNING: Universal dotnet4.x registry fixes FAILED!")
+            self.logger.error("This modlist may experience .NET Framework compatibility issues.")
+            self.logger.error("Consider manually setting mscoree=native in winecfg if problems occur.")
+            self.logger.error("=" * 80)
+            # Continue but user should be aware of potential issues
 
         # Step 5: Ensure permissions of Modlist directory
         if status_callback:
@@ -1528,14 +1529,18 @@ class ModlistHandler:
             return False
 
     def _apply_universal_dotnet_fixes(self):
-        """Apply universal dotnet4.x compatibility registry fixes to ALL modlists"""
+        """
+        Apply universal dotnet4.x compatibility registry fixes to ALL modlists.
+        Now called AFTER wine component installation to prevent overwrites.
+        Includes wineserver shutdown/flush to ensure persistence.
+        """
         try:
             prefix_path = os.path.join(str(self.compat_data_path), "pfx")
             if not os.path.exists(prefix_path):
                 self.logger.warning(f"Prefix path not found: {prefix_path}")
                 return False
 
-            self.logger.info("Applying universal dotnet4.x compatibility registry fixes...")
+            self.logger.info("Applying universal dotnet4.x compatibility registry fixes (post-component installation)...")
 
             # Find the appropriate Wine binary to use for registry operations
             wine_binary = self._find_wine_binary_for_registry()
@@ -1543,10 +1548,26 @@ class ModlistHandler:
                 self.logger.error("Could not find Wine binary for registry operations")
                 return False
 
+            # Find wineserver binary for flushing registry changes
+            wine_dir = os.path.dirname(wine_binary)
+            wineserver_binary = os.path.join(wine_dir, 'wineserver')
+            if not os.path.exists(wineserver_binary):
+                self.logger.warning(f"wineserver not found at {wineserver_binary}, registry flush may not work")
+                wineserver_binary = None
+
             # Set environment for Wine registry operations
             env = os.environ.copy()
             env['WINEPREFIX'] = prefix_path
             env['WINEDEBUG'] = '-all'  # Suppress Wine debug output
+
+            # Shutdown any running wineserver processes to ensure clean slate
+            if wineserver_binary:
+                self.logger.debug("Shutting down wineserver before applying registry fixes...")
+                try:
+                    subprocess.run([wineserver_binary, '-w'], env=env, timeout=30, capture_output=True)
+                    self.logger.debug("Wineserver shutdown complete")
+                except Exception as e:
+                    self.logger.warning(f"Wineserver shutdown failed (non-critical): {e}")
 
             # Registry fix 1: Set mscoree=native DLL override
             # This tells Wine to use native .NET runtime instead of Wine's implementation
@@ -1557,7 +1578,7 @@ class ModlistHandler:
                 '/v', 'mscoree', '/t', 'REG_SZ', '/d', 'native', '/f'
             ]
 
-            result1 = subprocess.run(cmd1, env=env, capture_output=True, text=True)
+            result1 = subprocess.run(cmd1, env=env, capture_output=True, text=True, errors='replace', timeout=30)
             if result1.returncode == 0:
                 self.logger.info("Successfully applied mscoree=native DLL override")
             else:
@@ -1572,18 +1593,57 @@ class ModlistHandler:
                 '/v', 'OnlyUseLatestCLR', '/t', 'REG_DWORD', '/d', '1', '/f'
             ]
 
-            result2 = subprocess.run(cmd2, env=env, capture_output=True, text=True)
+            result2 = subprocess.run(cmd2, env=env, capture_output=True, text=True, errors='replace', timeout=30)
             if result2.returncode == 0:
                 self.logger.info("Successfully applied OnlyUseLatestCLR=1 registry entry")
             else:
                 self.logger.warning(f"Failed to set OnlyUseLatestCLR: {result2.stderr}")
 
-            # Both fixes applied - this should eliminate dotnet4.x installation requirements
-            if result1.returncode == 0 and result2.returncode == 0:
-                self.logger.info("Universal dotnet4.x compatibility fixes applied successfully")
+            # Force wineserver to flush registry changes to disk
+            if wineserver_binary:
+                self.logger.debug("Flushing registry changes to disk via wineserver shutdown...")
+                try:
+                    subprocess.run([wineserver_binary, '-w'], env=env, timeout=30, capture_output=True)
+                    self.logger.debug("Registry changes flushed to disk")
+                except Exception as e:
+                    self.logger.warning(f"Registry flush failed (non-critical): {e}")
+
+            # VERIFICATION: Confirm the registry entries persisted
+            self.logger.info("Verifying registry entries were applied and persisted...")
+            verification_passed = True
+
+            # Verify mscoree=native
+            verify_cmd1 = [
+                wine_binary, 'reg', 'query',
+                'HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides',
+                '/v', 'mscoree'
+            ]
+            verify_result1 = subprocess.run(verify_cmd1, env=env, capture_output=True, text=True, errors='replace', timeout=30)
+            if verify_result1.returncode == 0 and 'native' in verify_result1.stdout:
+                self.logger.info("VERIFIED: mscoree=native is set correctly")
+            else:
+                self.logger.error(f"VERIFICATION FAILED: mscoree=native not found in registry. Query output: {verify_result1.stdout}")
+                verification_passed = False
+
+            # Verify OnlyUseLatestCLR=1
+            verify_cmd2 = [
+                wine_binary, 'reg', 'query',
+                'HKEY_LOCAL_MACHINE\\Software\\Microsoft\\.NETFramework',
+                '/v', 'OnlyUseLatestCLR'
+            ]
+            verify_result2 = subprocess.run(verify_cmd2, env=env, capture_output=True, text=True, errors='replace', timeout=30)
+            if verify_result2.returncode == 0 and ('0x1' in verify_result2.stdout or 'REG_DWORD' in verify_result2.stdout):
+                self.logger.info("VERIFIED: OnlyUseLatestCLR=1 is set correctly")
+            else:
+                self.logger.error(f"VERIFICATION FAILED: OnlyUseLatestCLR=1 not found in registry. Query output: {verify_result2.stdout}")
+                verification_passed = False
+
+            # Both fixes applied and verified
+            if result1.returncode == 0 and result2.returncode == 0 and verification_passed:
+                self.logger.info("Universal dotnet4.x compatibility fixes applied, flushed, and verified successfully")
                 return True
             else:
-                self.logger.warning("Some dotnet4.x registry fixes failed, but continuing...")
+                self.logger.error("Registry fixes failed verification - fixes may not persist across prefix restarts")
                 return False
 
         except Exception as e:

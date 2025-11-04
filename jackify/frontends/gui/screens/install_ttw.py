@@ -1,11 +1,12 @@
+
 """
 InstallModlistScreen for Jackify GUI
 """
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QGridLayout, QFileDialog, QTextEdit, QSizePolicy, QTabWidget, QDialog, QListWidget, QListWidgetItem, QMessageBox, QProgressDialog, QApplication, QCheckBox, QStyledItemDelegate, QStyle, QTableWidget, QTableWidgetItem, QHeaderView
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QGridLayout, QFileDialog, QTextEdit, QSizePolicy, QTabWidget, QDialog, QMessageBox, QProgressDialog, QApplication, QCheckBox, QStyledItemDelegate, QStyle, QFrame
 from PySide6.QtCore import Qt, QSize, QThread, Signal, QTimer, QProcess, QMetaObject, QUrl
-from PySide6.QtGui import QPixmap, QTextCursor, QColor, QPainter, QFont
+from PySide6.QtGui import QPixmap, QTextCursor, QPainter, QFont
 from ..shared_theme import JACKIFY_COLOR_BLUE, DEBUG_BORDERS
-from ..utils import ansi_to_html
+from ..utils import ansi_to_html, strip_ansi_control_codes
 from ..widgets.unsupported_game_dialog import UnsupportedGameDialog
 import os
 import subprocess
@@ -72,285 +73,16 @@ class ModlistFetchThread(QThread):
             self.result.emit([], error_msg)
 
 
-class SelectionDialog(QDialog):
-    def __init__(self, title, items, parent=None, show_search=True, placeholder_text="Search modlists...", show_legend=False):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setModal(True)
-        self.setMinimumWidth(600)
-        self.setMinimumHeight(300)
-        layout = QVBoxLayout(self)
-
-        self.show_search = show_search
-        if self.show_search:
-            # Search box with clear button
-            search_layout = QHBoxLayout()
-            self.search_box = QLineEdit()
-            self.search_box.setPlaceholderText(placeholder_text)
-            # Make placeholder text lighter
-            self.search_box.setStyleSheet("QLineEdit { color: #ccc; } QLineEdit:placeholder { color: #aaa; }")
-            self.clear_btn = QPushButton("Clear")
-            self.clear_btn.setFixedWidth(50)
-            search_layout.addWidget(self.search_box)
-            search_layout.addWidget(self.clear_btn)
-            layout.addLayout(search_layout)
-
-        if show_legend:
-            # Use table for modlist selection with proper columns
-            self.table_widget = QTableWidget()
-            self.table_widget.setColumnCount(4)
-            self.table_widget.setHorizontalHeaderLabels(["Modlist Name", "Download", "Install", "Total"])
-            
-            # Configure table appearance
-            self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
-            self.table_widget.setSelectionMode(QTableWidget.SingleSelection)
-            self.table_widget.verticalHeader().setVisible(False)
-            self.table_widget.setAlternatingRowColors(True)
-            
-            # Set column widths
-            header = self.table_widget.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.Stretch)  # Modlist name takes remaining space
-            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Download size
-            header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Install size  
-            header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Total size
-            
-            
-            self._all_items = list(items)
-            self._populate_table(self._all_items)
-            layout.addWidget(self.table_widget)
-            
-            # Apply initial NSFW filter since checkbox starts unchecked
-            self._filter_nsfw(False)
-        else:
-            # Use list for non-modlist dialogs (backward compatibility)
-            self.list_widget = QListWidget()
-            self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            self._all_items = list(items)
-            self._populate_list(self._all_items)
-            layout.addWidget(self.list_widget)
-        
-        # Add interactive legend bar only for modlist selection dialogs
-        if show_legend:
-            legend_layout = QHBoxLayout()
-            legend_layout.setContentsMargins(10, 5, 10, 5)
-            
-            # Status indicator explanation (far left)
-            status_label = QLabel('<small><b>[DOWN]</b> Unavailable</small>')
-            status_label.setStyleSheet("color: #bbb;")
-            legend_layout.addWidget(status_label)
-            
-            # Spacer after DOWN legend
-            legend_layout.addSpacing(15)
-            
-            # No need for size format explanation since we have table headers now
-            # Just add some spacing
-            
-            # Main spacer to push NSFW checkbox to far right
-            legend_layout.addStretch()
-            
-            # NSFW filter checkbox (far right)
-            self.nsfw_checkbox = QCheckBox("Show NSFW")
-            self.nsfw_checkbox.setStyleSheet("color: #bbb; font-size: 11px;")
-            self.nsfw_checkbox.setChecked(False)  # Default to hiding NSFW content
-            self.nsfw_checkbox.toggled.connect(self._filter_nsfw)
-            legend_layout.addWidget(self.nsfw_checkbox)
-            
-            # Legend container
-            legend_widget = QWidget()
-            legend_widget.setLayout(legend_layout)
-            legend_widget.setStyleSheet("background-color: #333; border-radius: 3px; margin: 2px;")
-            layout.addWidget(legend_widget)
-        
-        self.selected_item = None
-        
-        # Connect appropriate signals based on widget type
-        if show_legend:
-            self.table_widget.itemClicked.connect(self.on_table_item_clicked)
-            if self.show_search:
-                self.search_box.textChanged.connect(self._filter_table)
-                self.clear_btn.clicked.connect(self._clear_search)
-                self.search_box.returnPressed.connect(self._focus_table)
-                self.search_box.installEventFilter(self)
-        else:
-            self.list_widget.itemClicked.connect(self.on_item_clicked)
-            if self.show_search:
-                self.search_box.textChanged.connect(self._filter_list)
-                self.clear_btn.clicked.connect(self._clear_search)
-                self.search_box.returnPressed.connect(self._focus_list)
-                self.search_box.installEventFilter(self)
-
-    def _populate_list(self, items):
-        self.list_widget.clear()
-        for item in items:
-            # Create list item - custom delegate handles all styling
-            QListWidgetItem(item, self.list_widget)
-
-    def _populate_table(self, items):
-        self.table_widget.setRowCount(len(items))
-        for row, item in enumerate(items):
-            # Parse the item string to extract components
-            # Format: "[STATUS] Modlist Name    Download|Install|Total"
-            
-            # Extract status indicators
-            status_down = '[DOWN]' in item
-            status_nsfw = '[NSFW]' in item
-            
-            # Clean the item string
-            clean_item = item.replace('[DOWN]', '').replace('[NSFW]', '').strip()
-            
-            # Split into name and sizes
-            # The format should be "Name    Download|Install|Total"
-            parts = clean_item.rsplit('    ', 1)  # Split from right to separate name from sizes
-            if len(parts) == 2:
-                name = parts[0].strip()
-                sizes = parts[1].strip()
-                size_parts = sizes.split('|')
-                if len(size_parts) == 3:
-                    download_size, install_size, total_size = [s.strip() for s in size_parts]
-                else:
-                    # Fallback if format is unexpected
-                    download_size = install_size = total_size = sizes
-            else:
-                # Fallback if format is unexpected
-                name = clean_item
-                download_size = install_size = total_size = ""
-            
-            # Create table items
-            name_item = QTableWidgetItem(name)
-            download_item = QTableWidgetItem(download_size)
-            install_item = QTableWidgetItem(install_size)
-            total_item = QTableWidgetItem(total_size)
-            
-            # Apply styling
-            if status_down:
-                # Gray out and strikethrough for DOWN items
-                for item_widget in [name_item, download_item, install_item, total_item]:
-                    item_widget.setForeground(QColor('#999999'))
-                    font = item_widget.font()
-                    font.setStrikeOut(True)
-                    item_widget.setFont(font)
-            elif status_nsfw:
-                # Red text for NSFW items - but only the name, sizes stay white
-                name_item.setForeground(QColor('#ff4444'))
-                for item_widget in [download_item, install_item, total_item]:
-                    item_widget.setForeground(QColor('#ffffff'))
-            else:
-                # White text for normal items
-                for item_widget in [name_item, download_item, install_item, total_item]:
-                    item_widget.setForeground(QColor('#ffffff'))
-            
-            # Add status indicators to name if present
-            if status_nsfw:
-                name_item.setText(f"[NSFW] {name}")
-            if status_down:
-                # For DOWN items, we want [DOWN] normal and the name strikethrough
-                # Since we can't easily mix fonts in a single QTableWidgetItem, 
-                # we'll style the whole item but the visual effect will be clear
-                name_item.setText(f"[DOWN] {name_item.text()}")
-            
-            # Right-align size columns
-            download_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            install_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            total_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            
-            # Add items to table
-            self.table_widget.setItem(row, 0, name_item)
-            self.table_widget.setItem(row, 1, download_item)
-            self.table_widget.setItem(row, 2, install_item)
-            self.table_widget.setItem(row, 3, total_item)
-            
-            # Store original item text as data for filtering
-            name_item.setData(Qt.UserRole, item)
-
-    def _filter_list(self, text):
-        text = text.strip().lower()
-        if not text:
-            filtered = self._all_items
-        else:
-            filtered = [item for item in self._all_items if text in item.lower()]
-        self._populate_list(filtered)
-        if filtered:
-            self.list_widget.setCurrentRow(0)
-
-    def _clear_search(self):
-        self.search_box.clear()
-        self.search_box.setFocus()
-
-    def _focus_list(self):
-        self.list_widget.setFocus()
-        self.list_widget.setCurrentRow(0)
-
-    def _focus_table(self):
-        self.table_widget.setFocus()
-        self.table_widget.setCurrentCell(0, 0)
-
-    def _filter_table(self, text):
-        text = text.strip().lower()
-        if not text:
-            # Show all rows
-            for row in range(self.table_widget.rowCount()):
-                self.table_widget.setRowHidden(row, False)
-        else:
-            # Filter rows based on modlist name
-            for row in range(self.table_widget.rowCount()):
-                name_item = self.table_widget.item(row, 0)
-                if name_item:
-                    # Search in the modlist name
-                    match = text in name_item.text().lower()
-                    self.table_widget.setRowHidden(row, not match)
-
-    def on_table_item_clicked(self, item):
-        # Get the original item text from the name column
-        row = item.row()
-        name_item = self.table_widget.item(row, 0)
-        if name_item:
-            original_item = name_item.data(Qt.UserRole)
-            self.selected_item = original_item
-            self.accept()
-
-    def _filter_nsfw(self, show_nsfw):
-        """Filter NSFW modlists based on checkbox state"""
-        if show_nsfw:
-            # Show all items
-            filtered_items = self._all_items
-        else:
-            # Hide NSFW items
-            filtered_items = [item for item in self._all_items if '[NSFW]' not in item]
-        
-        # Use appropriate populate method based on widget type
-        if hasattr(self, 'table_widget'):
-            self._populate_table(filtered_items)
-            # Apply search filter if there's search text
-            if hasattr(self, 'search_box') and self.search_box.text().strip():
-                self._filter_table(self.search_box.text())
-        else:
-            self._populate_list(filtered_items)
-            # Apply search filter if there's search text
-            if hasattr(self, 'search_box') and self.search_box.text().strip():
-                self._filter_list(self.search_box.text())
-
-    def eventFilter(self, obj, event):
-        if self.show_search and obj == self.search_box and event.type() == event.Type.KeyPress:
-            if event.key() in (Qt.Key.Key_Down, Qt.Key.Key_Tab):
-                # Focus appropriate widget
-                if hasattr(self, 'table_widget'):
-                    self._focus_table()
-                else:
-                    self._focus_list()
-                return True
-        return super().eventFilter(obj, event)
-
-    def on_item_clicked(self, item):
-        self.selected_item = item.text()
-        self.accept()
-
-class InstallModlistScreen(QWidget):
+class InstallTTWScreen(QWidget):
     steam_restart_finished = Signal(bool, str)
-    def __init__(self, stacked_widget=None, main_menu_index=0):
+    resize_request = Signal(str)
+    integration_complete = Signal(bool, str)  # Signal for modlist integration completion (success, ttw_version)
+
+    def __init__(self, stacked_widget=None, main_menu_index=0, system_info=None):
         super().__init__()
         self.stacked_widget = stacked_widget
         self.main_menu_index = main_menu_index
+        self.system_info = system_info
         self.debug = DEBUG_BORDERS
         self.online_modlists = {}  # {game_type: [modlist_dict, ...]}
         self.modlist_details = {}  # {modlist_name: modlist_dict}
@@ -367,7 +99,12 @@ class InstallModlistScreen(QWidget):
         self.resolution_service = ResolutionService()
         self.config_handler = ConfigHandler()
         self.protontricks_service = ProtontricksDetectionService()
-        
+
+        # Modlist integration mode tracking
+        self._integration_mode = False
+        self._integration_modlist_name = None
+        self._integration_install_dir = None
+
         # Somnium guidance tracking
         self._show_somnium_guidance = False
         self._somnium_install_dir = None
@@ -378,10 +115,15 @@ class InstallModlistScreen(QWidget):
         
         # Initialize Wabbajack parser for game detection
         self.wabbajack_parser = WabbajackParser()
+        # Remember original main window geometry/min-size to restore on expand
+        self._saved_geometry = None
+        self._saved_min_size = None
 
         main_overall_vbox = QVBoxLayout(self)
         main_overall_vbox.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        main_overall_vbox.setContentsMargins(50, 50, 50, 0)  # No bottom margin
+        # Tighter outer margins and reduced inter-section spacing
+        main_overall_vbox.setContentsMargins(20, 12, 20, 0)
+        main_overall_vbox.setSpacing(6)
         if self.debug:
             self.setStyleSheet("border: 2px solid magenta;")
 
@@ -389,14 +131,16 @@ class InstallModlistScreen(QWidget):
         header_layout = QVBoxLayout()
         header_layout.setSpacing(1)  # Reduce spacing between title and description
         # Title (no logo)
-        title = QLabel("<b>Install a Modlist (Automated)</b>")
+        title = QLabel("<b>Install Tale of Two Wastelands (TTW)</b>")
         title.setStyleSheet(f"font-size: 20px; color: {JACKIFY_COLOR_BLUE}; margin: 0px; padding: 0px;")
         title.setAlignment(Qt.AlignHCenter)
         title.setMaximumHeight(30)  # Force compact height
         header_layout.addWidget(title)
+        
+        
         # Description
         desc = QLabel(
-            "This screen allows you to install a Wabbajack modlist using Jackify. "
+            "This screen allows you to install Tale of Two Wastelands (TTW) using the Hoolamike tool. "
             "Configure your options and start the installation."
         )
         desc.setWordWrap(True)
@@ -406,7 +150,9 @@ class InstallModlistScreen(QWidget):
         header_layout.addWidget(desc)
         header_widget = QWidget()
         header_widget.setLayout(header_layout)
-        header_widget.setMaximumHeight(75)  # Increase header height by 25% (60 + 15)
+        # Keep header compact
+        header_widget.setMaximumHeight(90)
+        # Remove height constraint to allow status banner to show
         if self.debug:
             header_widget.setStyleSheet("border: 2px solid pink;")
             header_widget.setToolTip("HEADER_SECTION")
@@ -420,73 +166,41 @@ class InstallModlistScreen(QWidget):
         user_config_vbox = QVBoxLayout()
         user_config_vbox.setAlignment(Qt.AlignTop)
         user_config_vbox.setSpacing(4)  # Reduce spacing between major form sections
-        # --- Tabs for source selection ---
-        self.source_tabs = QTabWidget()
-        self.source_tabs.setStyleSheet("QTabWidget::pane { background: #222; border: 1px solid #444; } QTabBar::tab { background: #222; color: #ccc; padding: 6px 16px; } QTabBar::tab:selected { background: #333; color: #3fd0ea; }")
-        if self.debug:
-            self.source_tabs.setStyleSheet("border: 2px solid cyan;")
-            self.source_tabs.setToolTip("SOURCE_TABS")
-        # --- Online List Tab ---
-        online_tab = QWidget()
-        online_tab_vbox = QVBoxLayout()
-        online_tab_vbox.setAlignment(Qt.AlignTop)
-        # Online List Controls
-        self.online_group = QWidget()
-        online_layout = QHBoxLayout()
-        online_layout.setContentsMargins(0, 0, 0, 0)
-        # --- Game Type Selection ---
-        self.game_types = ["Skyrim", "Fallout 4", "Fallout New Vegas", "Oblivion", "Starfield", "Oblivion Remastered", "Enderal", "Other"]
-        self.game_type_btn = QPushButton("Please Select...")
-        self.game_type_btn.setMinimumWidth(200)
-        self.game_type_btn.clicked.connect(self.open_game_type_dialog)
-        # --- Modlist Selection ---
-        self.modlist_btn = QPushButton("Select Modlist")
-        self.modlist_btn.setMinimumWidth(300)
-        self.modlist_btn.clicked.connect(self.open_modlist_dialog)
-        self.modlist_btn.setEnabled(False)
-        online_layout.addWidget(QLabel("Game Type:"))
-        online_layout.addWidget(self.game_type_btn)
-        online_layout.addSpacing(4)  # Reduced from 16 to 4
-        online_layout.addWidget(QLabel("Modlist:"))
-        online_layout.addWidget(self.modlist_btn)
-        self.online_group.setLayout(online_layout)
-        online_tab_vbox.addWidget(self.online_group)
-        online_tab.setLayout(online_tab_vbox)
-        self.source_tabs.addTab(online_tab, "Select Modlist")
-        # --- File Picker Tab ---
-        file_tab = QWidget()
-        file_tab_vbox = QVBoxLayout()
-        file_tab_vbox.setAlignment(Qt.AlignTop)
-        self.file_group = QWidget()
-        file_layout = QHBoxLayout()
-        file_layout.setContentsMargins(0, 0, 0, 0)
-        self.file_edit = QLineEdit()
-        self.file_edit.setMinimumWidth(400)
-        self.file_btn = QPushButton("Browse")
-        self.file_btn.clicked.connect(self.browse_wabbajack_file)
-        file_layout.addWidget(QLabel(".wabbajack File:"))
-        file_layout.addWidget(self.file_edit)
-        file_layout.addWidget(self.file_btn)
-        self.file_group.setLayout(file_layout)
-        file_tab_vbox.addWidget(self.file_group)
-        file_tab.setLayout(file_tab_vbox)
-        self.source_tabs.addTab(file_tab, "Use .wabbajack File")
-        user_config_vbox.addWidget(self.source_tabs)
-        # --- Install/Downloads Dir/API Key (reuse Tuxborn style) ---
+        
+        # --- Instructions ---
+        instruction_text = QLabel(
+            "Tale of Two Wastelands installation requires a .mpi file you can get from: "
+            '<a href="https://mod.pub/ttw/133/files">https://mod.pub/ttw/133/files</a> '
+            "(requires a user account for mod.db)"
+        )
+        instruction_text.setWordWrap(True)
+        instruction_text.setStyleSheet("color: #ccc; font-size: 12px; margin: 0px; padding: 0px; line-height: 1.2;")
+        instruction_text.setOpenExternalLinks(True)
+        user_config_vbox.addWidget(instruction_text)
+        
+        # --- Compact Form Grid for inputs (align with other screens) ---
         form_grid = QGridLayout()
         form_grid.setHorizontalSpacing(12)
-        form_grid.setVerticalSpacing(6)  # Increased from 1 to 6 for better readability
+        form_grid.setVerticalSpacing(6)
         form_grid.setContentsMargins(0, 0, 0, 0)
-        # Modlist Name (NEW FIELD)
-        modlist_name_label = QLabel("Modlist Name:")
-        self.modlist_name_edit = QLineEdit()
-        self.modlist_name_edit.setMaximumHeight(25)  # Force compact height
-        form_grid.addWidget(modlist_name_label, 0, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-        form_grid.addWidget(self.modlist_name_edit, 0, 1)
-        # Install Dir
-        install_dir_label = QLabel("Install Directory:")
+
+        # Row 0: TTW .mpi File location
+        file_label = QLabel("TTW .mpi File location:")
+        self.file_edit = QLineEdit()
+        self.file_edit.setMaximumHeight(25)
+        self.file_edit.textChanged.connect(self._update_start_button_state)
+        self.file_btn = QPushButton("Browse")
+        self.file_btn.clicked.connect(self.browse_wabbajack_file)
+        file_hbox = QHBoxLayout()
+        file_hbox.addWidget(self.file_edit)
+        file_hbox.addWidget(self.file_btn)
+        form_grid.addWidget(file_label, 0, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        form_grid.addLayout(file_hbox, 0, 1)
+
+        # Row 1: Output Directory
+        install_dir_label = QLabel("Output Directory:")
         self.install_dir_edit = QLineEdit(self.config_handler.get_modlist_install_base_dir())
-        self.install_dir_edit.setMaximumHeight(25)  # Force compact height
+        self.install_dir_edit.setMaximumHeight(25)
         self.browse_install_btn = QPushButton("Browse")
         self.browse_install_btn.clicked.connect(self.browse_install_dir)
         install_dir_hbox = QHBoxLayout()
@@ -494,150 +208,52 @@ class InstallModlistScreen(QWidget):
         install_dir_hbox.addWidget(self.browse_install_btn)
         form_grid.addWidget(install_dir_label, 1, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         form_grid.addLayout(install_dir_hbox, 1, 1)
-        # Downloads Dir
-        downloads_dir_label = QLabel("Downloads Directory:")
-        self.downloads_dir_edit = QLineEdit(self.config_handler.get_modlist_downloads_base_dir())
-        self.downloads_dir_edit.setMaximumHeight(25)  # Force compact height
-        self.browse_downloads_btn = QPushButton("Browse")
-        self.browse_downloads_btn.clicked.connect(self.browse_downloads_dir)
-        downloads_dir_hbox = QHBoxLayout()
-        downloads_dir_hbox.addWidget(self.downloads_dir_edit)
-        downloads_dir_hbox.addWidget(self.browse_downloads_btn)
-        form_grid.addWidget(downloads_dir_label, 2, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-        form_grid.addLayout(downloads_dir_hbox, 2, 1)
-        # Nexus API Key
-        api_key_label = QLabel("Nexus API Key:")
-        self.api_key_edit = QLineEdit()
-        self.api_key_edit.setMaximumHeight(25)  # Force compact height
-        # Services already initialized above
-        # Set up obfuscation timer and state
-        self.api_key_obfuscation_timer = QTimer(self)
-        self.api_key_obfuscation_timer.setSingleShot(True)
-        self.api_key_obfuscation_timer.timeout.connect(self._obfuscate_api_key)
-        self.api_key_original_text = ""
-        self.api_key_is_obfuscated = False
-        # Connect events for obfuscation
-        self.api_key_edit.textChanged.connect(self._on_api_key_text_changed)
-        self.api_key_edit.focusInEvent = self._on_api_key_focus_in
-        self.api_key_edit.focusOutEvent = self._on_api_key_focus_out
-        # Load saved API key if available
-        saved_key = self.api_key_service.get_saved_api_key()
-        if saved_key:
-            self.api_key_original_text = saved_key  # Set original text first
-            self.api_key_edit.setText(saved_key)
-            self._obfuscate_api_key()  # Immediately obfuscate saved keys
-        form_grid.addWidget(api_key_label, 3, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-        form_grid.addWidget(self.api_key_edit, 3, 1)
-        # API Key save checkbox and info (row 4)
-        api_save_layout = QHBoxLayout()
-        api_save_layout.setContentsMargins(0, 0, 0, 0)
-        api_save_layout.setSpacing(8)
-        self.save_api_key_checkbox = QCheckBox("Save API Key")
-        self.save_api_key_checkbox.setChecked(self.api_key_service.has_saved_api_key())
-        self.save_api_key_checkbox.toggled.connect(self._on_api_key_save_toggled)
-        api_save_layout.addWidget(self.save_api_key_checkbox, alignment=Qt.AlignTop)
+
+        # --- Hoolamike Status aligned in form grid (row 2) ---
+        hoolamike_label = QLabel("Hoolamike Status:")
+        self.hoolamike_status = QLabel("Checking...")
+        self.hoolamike_btn = QPushButton("Install now")
+        self.hoolamike_btn.setStyleSheet("""
+            QPushButton:hover { opacity: 0.95; }
+            QPushButton:disabled { opacity: 0.6; }
+        """)
+        self.hoolamike_btn.setVisible(False)
+        self.hoolamike_btn.clicked.connect(self.install_hoolamike)
+        hoolamike_hbox = QHBoxLayout()
+        hoolamike_hbox.setContentsMargins(0, 0, 0, 0)
+        hoolamike_hbox.setSpacing(8)
+        hoolamike_hbox.addWidget(self.hoolamike_status)
+        hoolamike_hbox.addWidget(self.hoolamike_btn)
+        hoolamike_hbox.addStretch()
+        form_grid.addWidget(hoolamike_label, 2, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        form_grid.addLayout(hoolamike_hbox, 2, 1)
+
+        # --- Game Requirements aligned in form grid (row 3) ---
+        game_req_label = QLabel("Game Requirements:")
+        self.fallout3_status = QLabel("Fallout 3: Checking...")
+        self.fallout3_status.setStyleSheet("color: #ccc;")
+        self.fnv_status = QLabel("Fallout New Vegas: Checking...")
+        self.fnv_status.setStyleSheet("color: #ccc;")
+        game_req_hbox = QHBoxLayout()
+        game_req_hbox.setContentsMargins(0, 0, 0, 0)
+        game_req_hbox.setSpacing(16)
+        game_req_hbox.addWidget(self.fallout3_status)
+        game_req_hbox.addWidget(self.fnv_status)
+        game_req_hbox.addStretch()
+        form_grid.addWidget(game_req_label, 3, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        form_grid.addLayout(game_req_hbox, 3, 1)
+
+        form_group = QWidget()
+        form_group.setLayout(form_grid)
+        user_config_vbox.addWidget(form_group)
         
-        # Validate button removed - validation now happens silently on save checkbox toggle
-        api_info = QLabel(
-            '<small>Storing your API Key locally is done so at your own risk.<br>'
-            'You can get your API key at: <a href="https://www.nexusmods.com/users/myaccount?tab=api">'
-            'https://www.nexusmods.com/users/myaccount?tab=api</a></small>'
-        )
-        api_info.setOpenExternalLinks(False)
-        api_info.linkActivated.connect(self._open_url_safe)
-        api_info.setWordWrap(True)
-        api_info.setAlignment(Qt.AlignLeft)
-        api_save_layout.addWidget(api_info, stretch=1)
-        api_save_widget = QWidget()
-        api_save_widget.setLayout(api_save_layout)
-        # Remove height constraint to prevent text truncation
-        if self.debug:
-            api_save_widget.setStyleSheet("border: 2px solid blue;")
-            api_save_widget.setToolTip("API_KEY_SECTION")
-        form_grid.addWidget(api_save_widget, 4, 1)
-        # --- Resolution Dropdown ---
-        resolution_label = QLabel("Resolution:")
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.resolution_combo.addItem("Leave unchanged")
-        self.resolution_combo.addItems([
-            "1280x720",
-            "1280x800 (Steam Deck)",
-            "1366x768",
-            "1440x900",
-            "1600x900",
-            "1600x1200",
-            "1680x1050",
-            "1920x1080",
-            "1920x1200",
-            "2048x1152",
-            "2560x1080",
-            "2560x1440",
-            "2560x1600",
-            "3440x1440",
-            "3840x1600",
-            "3840x2160",
-            "3840x2400",
-            "5120x1440",
-            "5120x2160",
-            "7680x4320"
-        ])
-        # Load saved resolution if available
-        saved_resolution = self.resolution_service.get_saved_resolution()
-        is_steam_deck = False
-        try:
-            if os.path.exists('/etc/os-release'):
-                with open('/etc/os-release') as f:
-                    if 'steamdeck' in f.read().lower():
-                        is_steam_deck = True
-        except Exception:
-            pass
-        if saved_resolution:
-            combo_items = [self.resolution_combo.itemText(i) for i in range(self.resolution_combo.count())]
-            resolution_index = self.resolution_service.get_resolution_index(saved_resolution, combo_items)
-            self.resolution_combo.setCurrentIndex(resolution_index)
-            debug_print(f"DEBUG: Loaded saved resolution: {saved_resolution} (index: {resolution_index})")
-        elif is_steam_deck:
-            # Set default to 1280x800 (Steam Deck)
-            combo_items = [self.resolution_combo.itemText(i) for i in range(self.resolution_combo.count())]
-            if "1280x800 (Steam Deck)" in combo_items:
-                self.resolution_combo.setCurrentIndex(combo_items.index("1280x800 (Steam Deck)"))
-            else:
-                self.resolution_combo.setCurrentIndex(0)
-        # Otherwise, default is 'Leave unchanged' (index 0)
-        form_grid.addWidget(resolution_label, 5, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        # (Hoolamike and Game Requirements now aligned in form_grid above)
         
-        # Horizontal layout for resolution dropdown and auto-restart checkbox
-        resolution_and_restart_layout = QHBoxLayout()
-        resolution_and_restart_layout.setSpacing(12)
-        
-        # Resolution dropdown (made smaller)
-        self.resolution_combo.setMaximumWidth(280)  # Constrain width but keep aesthetically pleasing
-        resolution_and_restart_layout.addWidget(self.resolution_combo)
-        
-        # Add stretch to push checkbox to the right
-        resolution_and_restart_layout.addStretch()
-        
-        # Auto-accept Steam restart checkbox (right-aligned)
-        self.auto_restart_checkbox = QCheckBox("Auto-accept Steam restart")
-        self.auto_restart_checkbox.setChecked(False)  # Always default to unchecked per session
-        self.auto_restart_checkbox.setToolTip("When checked, Steam restart dialog will be automatically accepted, allowing unattended installation")
-        resolution_and_restart_layout.addWidget(self.auto_restart_checkbox)
-        
-        form_grid.addLayout(resolution_and_restart_layout, 5, 1)
-        form_section_widget = QWidget()
-        form_section_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        form_section_widget.setLayout(form_grid)
-        form_section_widget.setMinimumHeight(220)  # Increased to allow RED API key box proper height
-        form_section_widget.setMaximumHeight(240)  # Increased to allow RED API key box proper height
-        if self.debug:
-            form_section_widget.setStyleSheet("border: 2px solid blue;")
-            form_section_widget.setToolTip("FORM_SECTION")
-        user_config_vbox.addWidget(form_section_widget)
         # --- Buttons ---
         btn_row = QHBoxLayout()
         btn_row.setAlignment(Qt.AlignHCenter)
         self.start_btn = QPushButton("Start Installation")
+        self.start_btn.setEnabled(False)  # Disabled until requirements are met
         btn_row.addWidget(self.start_btn)
         
 
@@ -652,7 +268,23 @@ class InstallModlistScreen(QWidget):
         self.cancel_install_btn.clicked.connect(self.cancel_installation)
         self.cancel_install_btn.setVisible(False)  # Hidden by default
         btn_row.addWidget(self.cancel_install_btn)
-        
+
+        # Add stretches to center buttons row
+        btn_row.insertStretch(0, 1)
+        btn_row.addStretch(1)
+
+        # Show Details Checkbox (collapsible console)
+        self.show_details_checkbox = QCheckBox("Show details")
+        # Start collapsed by default (console hidden until user opts in)
+        self.show_details_checkbox.setChecked(False)
+        # Use toggled(bool) for reliable signal and map to our handler
+        try:
+            self.show_details_checkbox.toggled.connect(self._on_show_details_toggled)
+        except Exception:
+            # Fallback to stateChanged if toggled is unavailable
+            self.show_details_checkbox.stateChanged.connect(self._toggle_console_visibility)
+        # Note: Checkbox will be placed in the status banner row (right-aligned)
+
         # Wrap button row in widget for debug borders
         btn_row_widget = QWidget()
         btn_row_widget.setLayout(btn_row)
@@ -660,6 +292,8 @@ class InstallModlistScreen(QWidget):
         if self.debug:
             btn_row_widget.setStyleSheet("border: 2px solid red;")
             btn_row_widget.setToolTip("BUTTON_ROW")
+        # Keep a reference for dynamic sizing when collapsing/expanding
+        self.btn_row_widget = btn_row_widget
         user_config_widget = QWidget()
         user_config_widget.setLayout(user_config_vbox)
         user_config_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)  # Allow vertical expansion to fill space
@@ -688,42 +322,70 @@ class InstallModlistScreen(QWidget):
         upper_hbox.addWidget(user_config_widget, stretch=1)
         upper_hbox.addWidget(process_monitor_widget, stretch=3)
         upper_hbox.setAlignment(Qt.AlignTop)
-        upper_section_widget = QWidget()
-        upper_section_widget.setLayout(upper_hbox)
-        upper_section_widget.setMaximumHeight(320)  # Increased to ensure resolution dropdown is visible
+        self.upper_section_widget = QWidget()
+        self.upper_section_widget.setLayout(upper_hbox)
+        # Keep the top section tightly wrapped to its content height
+        try:
+            self.upper_section_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            self.upper_section_widget.setMaximumHeight(self.upper_section_widget.sizeHint().height())
+        except Exception:
+            pass
         if self.debug:
-            upper_section_widget.setStyleSheet("border: 2px solid green;")
-            upper_section_widget.setToolTip("UPPER_SECTION")
-        main_overall_vbox.addWidget(upper_section_widget)
+            self.upper_section_widget.setStyleSheet("border: 2px solid green;")
+            self.upper_section_widget.setToolTip("UPPER_SECTION")
+        main_overall_vbox.addWidget(self.upper_section_widget)
+
+        # --- Status Banner (shows high-level progress) ---
+        self.status_banner = QLabel("Ready to install")
+        self.status_banner.setAlignment(Qt.AlignCenter)
+        self.status_banner.setStyleSheet(f"""
+            background-color: #2a2a2a;
+            color: {JACKIFY_COLOR_BLUE};
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 13px;
+        """)
+        # Prevent banner from expanding vertically
+        self.status_banner.setMaximumHeight(34)
+        self.status_banner.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # Show the banner by default so users see status even when collapsed
+        self.status_banner.setVisible(True)
+        # Create a compact banner row with the checkbox right-aligned
+        banner_row = QHBoxLayout()
+        # Minimal padding to avoid visible gaps
+        banner_row.setContentsMargins(0, 0, 0, 0)
+        banner_row.setSpacing(8)
+        banner_row.addWidget(self.status_banner, 1)
+        banner_row.addStretch()
+        banner_row.addWidget(self.show_details_checkbox)
+        banner_row_widget = QWidget()
+        banner_row_widget.setLayout(banner_row)
+        main_overall_vbox.addWidget(banner_row_widget)
+
         # Remove spacing - console should expand to fill available space
         # --- Console output area (full width, placeholder for now) ---
         self.console = QTextEdit()
         self.console.setReadOnly(True)
         self.console.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        self.console.setMinimumHeight(50)   # Very small minimum - can shrink to almost nothing
-        self.console.setMaximumHeight(1000) # Allow growth when space available
+        # Console starts hidden; toggled via Show details
+        self.console.setMinimumHeight(0)
+        self.console.setMaximumHeight(0)
         self.console.setFontFamily('monospace')
         if self.debug:
             self.console.setStyleSheet("border: 2px solid yellow;")
             self.console.setToolTip("CONSOLE")
-        
+
         # Set up scroll tracking for professional auto-scroll behavior
         self._setup_scroll_tracking()
-        
-        # Create a container that holds console + button row with proper spacing
-        console_and_buttons_widget = QWidget()
-        console_and_buttons_layout = QVBoxLayout()
-        console_and_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        console_and_buttons_layout.setSpacing(8)  # Small gap between console and buttons
-        
-        console_and_buttons_layout.addWidget(self.console, stretch=1)  # Console fills most space
-        console_and_buttons_layout.addWidget(btn_row_widget)  # Buttons at bottom of this container
-        
-        console_and_buttons_widget.setLayout(console_and_buttons_layout)
-        if self.debug:
-            console_and_buttons_widget.setStyleSheet("border: 2px solid lightblue;")
-            console_and_buttons_widget.setToolTip("CONSOLE_AND_BUTTONS_CONTAINER")
-        main_overall_vbox.addWidget(console_and_buttons_widget, stretch=1)  # This container fills remaining space
+
+        # Add console directly so we can hide/show without affecting buttons
+        main_overall_vbox.addWidget(self.console, stretch=1)
+        # Place the button row after the console so it's always visible and centered
+        main_overall_vbox.addWidget(btn_row_widget, alignment=Qt.AlignHCenter)
+
+        # Store reference to main layout
+        self.main_overall_vbox = main_overall_vbox
         self.setLayout(main_overall_vbox)
 
         self.current_modlists = []
@@ -739,43 +401,243 @@ class InstallModlistScreen(QWidget):
         # --- Start Installation button ---
         self.start_btn.clicked.connect(self.validate_and_start_install)
         self.steam_restart_finished.connect(self._on_steam_restart_finished)
-        
 
-        
         # Initialize process tracking
         self.process = None
         
         # Initialize empty controls list - will be populated after UI is built
         self._actionable_controls = []
+    
+    def check_requirements(self):
+        """Check and display requirements status"""
+        from jackify.backend.handlers.path_handler import PathHandler
+        from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+        from jackify.backend.handlers.filesystem_handler import FileSystemHandler
+        from jackify.backend.handlers.config_handler import ConfigHandler
+        from jackify.backend.models.configuration import SystemInfo
+        
+        path_handler = PathHandler()
+        
+        # Check game detection
+        detected_games = path_handler.find_vanilla_game_paths()
+        
+        # Fallout 3
+        if 'Fallout 3' in detected_games:
+            self.fallout3_status.setText("Fallout 3: Detected")
+            self.fallout3_status.setStyleSheet("color: #3fd0ea;")
+        else:
+            self.fallout3_status.setText("Fallout 3: Not Found - Install from Steam")
+            self.fallout3_status.setStyleSheet("color: #f44336;")
+        
+        # Fallout New Vegas
+        if 'Fallout New Vegas' in detected_games:
+            self.fnv_status.setText("Fallout New Vegas: Detected")
+            self.fnv_status.setStyleSheet("color: #3fd0ea;")
+        else:
+            self.fnv_status.setText("Fallout New Vegas: Not Found - Install from Steam")
+            self.fnv_status.setStyleSheet("color: #f44336;")
+        
+        # Update Start button state after checking requirements
+        self._update_start_button_state()
+    
+    def _check_hoolamike_status(self):
+        """Check Hoolamike installation status and update UI"""
+        try:
+            from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+            from jackify.backend.handlers.filesystem_handler import FileSystemHandler
+            from jackify.backend.handlers.config_handler import ConfigHandler
+            from jackify.backend.models.configuration import SystemInfo
+            
+            # Create handler instances
+            filesystem_handler = FileSystemHandler()
+            config_handler = ConfigHandler()
+            system_info = SystemInfo(is_steamdeck=False)
+            hoolamike_handler = HoolamikeHandler(
+                steamdeck=False,
+                verbose=False,
+                filesystem_handler=filesystem_handler,
+                config_handler=config_handler
+            )
+            
+            # Check if Hoolamike is installed
+            hoolamike_handler._check_hoolamike_installation()
+
+            if hoolamike_handler.hoolamike_installed:
+                # Check version against latest
+                update_available, installed_v, latest_v = hoolamike_handler.is_hoolamike_update_available()
+                if update_available:
+                    self.hoolamike_status.setText("Out of date")
+                    self.hoolamike_status.setStyleSheet("color: #f44336;")
+                    self.hoolamike_btn.setText("Update now")
+                    self.hoolamike_btn.setEnabled(True)
+                    self.hoolamike_btn.setVisible(True)
+                else:
+                    self.hoolamike_status.setText("Ready")
+                    self.hoolamike_status.setStyleSheet("color: #3fd0ea;")
+                    self.hoolamike_btn.setText("Update now")
+                    self.hoolamike_btn.setEnabled(False)  # Greyed out when ready
+                    self.hoolamike_btn.setVisible(True)
+            else:
+                self.hoolamike_status.setText("Not Found")
+                self.hoolamike_status.setStyleSheet("color: #f44336;")
+                self.hoolamike_btn.setText("Install now")
+                self.hoolamike_btn.setEnabled(True)
+                self.hoolamike_btn.setVisible(True)
+                
+        except Exception as e:
+            self.hoolamike_status.setText("Check Failed")
+            self.hoolamike_status.setStyleSheet("color: #f44336;")
+            self.hoolamike_btn.setText("Install now")
+            self.hoolamike_btn.setEnabled(True)
+            self.hoolamike_btn.setVisible(True)
+            debug_print(f"DEBUG: Hoolamike status check failed: {e}")
+
+    def install_hoolamike(self):
+        """Install or update Hoolamike"""
+        # If not detected, show an appreciation/info dialog about Hoolamike first
+        try:
+            current_status = self.hoolamike_status.text().strip()
+        except Exception:
+            current_status = ""
+        if current_status == "Not Found":
+            MessageService.information(
+                self,
+                "Hoolamike Installation",
+                (
+                    "Hoolamike is a community-made installer that enables the installation of modlists and TTW on Linux.<br><br>"
+                    "Project: <a href=\"https://github.com/Niedzwiedzw/hoolamike\">github.com/Niedzwiedzw/hoolamike</a><br>"
+                    "Please star the repository and thank the developer.<br><br>"
+                    "Jackify will now download and install the latest Linux build of Hoolamike."
+                ),
+                safety_level="low",
+            )
+
+        # Update button to show installation in progress
+        self.hoolamike_btn.setText("Installing...")
+        self.hoolamike_btn.setEnabled(False)
+
+        self.console.append("Installing/updating Hoolamike...")
+
+        try:
+            from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+            from jackify.backend.handlers.filesystem_handler import FileSystemHandler
+            from jackify.backend.handlers.config_handler import ConfigHandler
+            from jackify.backend.models.configuration import SystemInfo
+
+            # Create handler instances
+            filesystem_handler = FileSystemHandler()
+            config_handler = ConfigHandler()
+            system_info = SystemInfo(is_steamdeck=False)
+            hoolamike_handler = HoolamikeHandler(
+                steamdeck=False,
+                verbose=False,
+                filesystem_handler=filesystem_handler,
+                config_handler=config_handler
+            )
+
+            # Install Hoolamike
+            success, message = hoolamike_handler.install_hoolamike()
+
+            if success:
+                # Extract path from message if available, or show config path
+                install_path = hoolamike_handler.hoolamike_app_install_path
+                self.console.append("Hoolamike installed successfully")
+                self.console.append(f"Installation location: {install_path}")
+                self.console.append("Re-checking Hoolamike status...")
+                # Re-check Hoolamike status after installation
+                self._check_hoolamike_status()
+                self._update_start_button_state()
+
+                # Update button to show successful installation
+                self.hoolamike_btn.setText("Installed")
+                # Keep button disabled - no need to reinstall
+            else:
+                self.console.append(f"Installation failed: {message}")
+                # Re-enable button on failure so user can retry
+                self.hoolamike_btn.setText("Install now")
+                self.hoolamike_btn.setEnabled(True)
+
+        except Exception as e:
+            self.console.append(f"Error installing Hoolamike: {str(e)}")
+            debug_print(f"DEBUG: Hoolamike installation error: {e}")
+            # Re-enable button on exception so user can retry
+            self.hoolamike_btn.setText("Install now")
+            self.hoolamike_btn.setEnabled(True)
+    
+    def _check_ttw_requirements(self):
+        """Check TTW requirements before installation"""
+        from jackify.backend.handlers.path_handler import PathHandler
+        from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+        from jackify.backend.handlers.filesystem_handler import FileSystemHandler
+        from jackify.backend.handlers.config_handler import ConfigHandler
+        
+        path_handler = PathHandler()
+        
+        # Check game detection
+        detected_games = path_handler.find_vanilla_game_paths()
+        missing_games = []
+        
+        if 'Fallout 3' not in detected_games:
+            missing_games.append("Fallout 3")
+        if 'Fallout New Vegas' not in detected_games:
+            missing_games.append("Fallout New Vegas")
+        
+        if missing_games:
+            MessageService.warning(
+                self, 
+                "Missing Required Games", 
+                f"TTW requires both Fallout 3 and Fallout New Vegas to be installed.\n\nMissing: {', '.join(missing_games)}"
+            )
+            return False
+        
+        # Check Hoolamike using the status we already checked
+        status_text = self.hoolamike_status.text()
+        if status_text in ("Not Found", "Check Failed"):
+            MessageService.warning(
+                self,
+                "Hoolamike Required",
+                "Hoolamike is required for TTW installation but is not installed.\n\nPlease install Hoolamike using the 'Install now' button."
+            )
+            return False
+        
+        return True
         
         # Now collect all actionable controls after UI is fully built
         self._collect_actionable_controls()
+        
+        # Check if all requirements are met and enable/disable Start button
+        self._update_start_button_state()
+    
+    def _update_start_button_state(self):
+        """Enable/disable Start button based on requirements and file selection"""
+        # Check if all requirements are met
+        requirements_met = self._check_ttw_requirements()
+        
+        # Check if .mpi file is selected
+        mpi_file_selected = bool(self.file_edit.text().strip())
+        
+        # Enable Start button only if both requirements are met and file is selected
+        self.start_btn.setEnabled(requirements_met and mpi_file_selected)
+        
+        # Update button text to indicate what's missing
+        if not requirements_met:
+            self.start_btn.setText("Requirements Not Met")
+        elif not mpi_file_selected:
+            self.start_btn.setText("Select TTW .mpi File")
+        else:
+            self.start_btn.setText("Start Installation")
     
     def _collect_actionable_controls(self):
         """Collect all actionable controls that should be disabled during operations (except Cancel)"""
         self._actionable_controls = [
             # Main action button
             self.start_btn,
-            # Game/modlist selection
-            self.game_type_btn,
-            self.modlist_btn,
-            # Source tabs (entire tab widget)
-            self.source_tabs,
-            # Form fields
-            self.modlist_name_edit,
-            self.install_dir_edit,
-            self.downloads_dir_edit,
-            self.api_key_edit,
+            # File selection
             self.file_edit,
-            # Browse buttons
-            self.browse_install_btn,
-            self.browse_downloads_btn,
             self.file_btn,
-            # Resolution controls
-            self.resolution_combo,
-            # Checkboxes
-            self.save_api_key_checkbox,
-            self.auto_restart_checkbox,
+            # Install directory
+            self.install_dir_edit,
+            self.browse_install_btn,
         ]
 
     def _disable_controls_during_operation(self):
@@ -793,8 +655,31 @@ class InstallModlistScreen(QWidget):
     def refresh_paths(self):
         """Refresh cached paths when config changes."""
         from jackify.shared.paths import get_jackify_logs_dir
-        self.modlist_log_path = get_jackify_logs_dir() / 'Modlist_Install_workflow.log'
+        self.modlist_log_path = get_jackify_logs_dir() / 'TTW_Install_workflow.log'
         os.makedirs(os.path.dirname(self.modlist_log_path), exist_ok=True)
+
+    def set_modlist_integration_mode(self, modlist_name: str, install_dir: str):
+        """Set the screen to modlist integration mode
+
+        This mode is activated when TTW needs to be installed and integrated
+        into an existing modlist. In this mode, after TTW installation completes,
+        the TTW output will be automatically integrated into the modlist.
+
+        Args:
+            modlist_name: Name of the modlist to integrate TTW into
+            install_dir: Installation directory of the modlist
+        """
+        self._integration_mode = True
+        self._integration_modlist_name = modlist_name
+        self._integration_install_dir = install_dir
+
+        # Reset saved geometry so showEvent can properly collapse from current window size
+        self._saved_geometry = None
+        self._saved_min_size = None
+
+        # Update UI to show integration mode
+        debug_print(f"TTW screen set to integration mode for modlist: {modlist_name}")
+        debug_print(f"Installation directory: {install_dir}")
 
     def _open_url_safe(self, url):
         """Safely open URL using subprocess to avoid Qt library conflicts in PyInstaller"""
@@ -803,6 +688,30 @@ class InstallModlistScreen(QWidget):
             subprocess.Popen(['xdg-open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             print(f"Warning: Could not open URL {url}: {e}")
+
+    def force_collapsed_state(self):
+        """Force the screen into its collapsed state regardless of prior layout.
+
+        This is used to resolve timing/race conditions when navigating here from
+        the end of the Install Modlist workflow, ensuring the UI opens collapsed
+        just like when launched from Additional Tasks.
+        """
+        try:
+            from PySide6.QtCore import Qt as _Qt
+            # Ensure checkbox is unchecked without emitting user-facing signals
+            if self.show_details_checkbox.isChecked():
+                self.show_details_checkbox.blockSignals(True)
+                self.show_details_checkbox.setChecked(False)
+                self.show_details_checkbox.blockSignals(False)
+            # Apply collapsed layout explicitly
+            self._toggle_console_visibility(_Qt.Unchecked)
+            # Inform parent window to collapse height
+            try:
+                self.resize_request.emit('collapse')
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def resizeEvent(self, event):
         """Handle window resize to prioritize form over console"""
@@ -814,26 +723,132 @@ class InstallModlistScreen(QWidget):
         # The console automatically fills remaining space due to stretch=1 in the layout
         # Remove any fixed height constraints to allow natural stretching
         self.console.setMaximumHeight(16777215)  # Reset to default maximum
-        self.console.setMinimumHeight(50)  # Keep minimum height for usability
+        # Only enforce a small minimum when details are shown; keep 0 when collapsed
+        if self.console.isVisible():
+            self.console.setMinimumHeight(50)
+        else:
+            self.console.setMinimumHeight(0)
 
     def showEvent(self, event):
-        """Called when the widget becomes visible - always reload saved API key"""
+        """Called when the widget becomes visible"""
         super().showEvent(event)
-        # Always reload saved API key to pick up changes from Settings dialog
-        saved_key = self.api_key_service.get_saved_api_key()
-        if saved_key:
-            self.api_key_original_text = saved_key
-            self.api_key_edit.setText(saved_key)
-            self.api_key_is_obfuscated = False  # Start unobfuscated
-            # Set checkbox state
-            self.save_api_key_checkbox.setChecked(True)
-            # Immediately obfuscate saved keys (don't wait 3 seconds)
-            self._obfuscate_api_key()
-        elif not self.api_key_edit.text().strip():
-            # Only clear if no saved key and field is empty
-            self.api_key_original_text = ""
-            self.save_api_key_checkbox.setChecked(False)
-        # Do NOT load saved parent directories
+        debug_print(f"DEBUG: TTW showEvent - integration_mode={self._integration_mode}")
+        # Check Hoolamike status only when TTW screen is opened
+        self._check_hoolamike_status()
+
+        # Ensure initial collapsed layout each time this screen is opened
+        try:
+            from PySide6.QtCore import Qt as _Qt
+            # On Steam Deck: keep expanded layout and hide the details toggle
+            try:
+                is_steamdeck = False
+                # Check our own system_info first
+                if self.system_info and getattr(self.system_info, 'is_steamdeck', False):
+                    is_steamdeck = True
+                # Fallback to checking parent window's system_info
+                elif not self.system_info:
+                    parent = self.window()
+                    if parent and hasattr(parent, 'system_info') and getattr(parent.system_info, 'is_steamdeck', False):
+                        is_steamdeck = True
+
+                if is_steamdeck:
+                    debug_print("DEBUG: Steam Deck detected, keeping expanded")
+                    # Force expanded state and hide checkbox
+                    if self.show_details_checkbox.isVisible():
+                        self.show_details_checkbox.setVisible(False)
+                    # Show console with proper sizing for Steam Deck
+                    self.console.setVisible(True)
+                    self.console.show()
+                    self.console.setMinimumHeight(200)
+                    self.console.setMaximumHeight(16777215)  # Remove height limit
+                    return
+            except Exception as e:
+                debug_print(f"DEBUG: Steam Deck check exception: {e}")
+                pass
+            debug_print(f"DEBUG: Checkbox checked={self.show_details_checkbox.isChecked()}")
+            if self.show_details_checkbox.isChecked():
+                self.show_details_checkbox.blockSignals(True)
+                self.show_details_checkbox.setChecked(False)
+                self.show_details_checkbox.blockSignals(False)
+            debug_print("DEBUG: Calling _toggle_console_visibility(Unchecked)")
+            self._toggle_console_visibility(_Qt.Unchecked)
+            # Force the window to compact height to eliminate bottom whitespace
+            main_window = self.window()
+            debug_print(f"DEBUG: main_window={main_window}, size={main_window.size() if main_window else None}")
+            if main_window:
+                # Save original geometry once
+                if self._saved_geometry is None:
+                    self._saved_geometry = main_window.geometry()
+                    debug_print(f"DEBUG: Saved geometry: {self._saved_geometry}")
+                if self._saved_min_size is None:
+                    self._saved_min_size = main_window.minimumSize()
+                    debug_print(f"DEBUG: Saved min size: {self._saved_min_size}")
+                # Recompute and pin upper section to its content size to avoid slack
+                try:
+                    if hasattr(self, 'upper_section_widget') and self.upper_section_widget is not None:
+                        self.upper_section_widget.setMaximumHeight(self.upper_section_widget.sizeHint().height())
+                except Exception:
+                    pass
+                # Derive compact height from current content (tighter)
+                compact_height = max(440, min(540, self.sizeHint().height() + 20))
+                debug_print(f"DEBUG: Calculated compact_height={compact_height}, sizeHint={self.sizeHint().height()}")
+
+                # COMPLETE RESET: Clear ALL size constraints from previous screen
+                from PySide6.QtCore import QSize
+                main_window.showNormal()
+                # First, completely unlock the window
+                main_window.setMinimumSize(QSize(0, 0))
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                debug_print("DEBUG: Cleared all size constraints")
+
+                # Now set our compact constraints
+                main_window.setMinimumSize(QSize(1200, compact_height))
+                main_window.setMaximumHeight(compact_height)
+                debug_print(f"DEBUG: Set compact constraints: min=1200x{compact_height}, max_height={compact_height}")
+
+                # Force resize
+                before_size = main_window.size()
+                main_window.resize(1400, compact_height)
+                debug_print(f"DEBUG: Resized from {before_size} to {main_window.size()}")
+                # Notify parent to ensure compact
+                try:
+                    self.resize_request.emit('collapse')
+                    debug_print("DEBUG: Emitted resize_request collapse signal")
+                except Exception as e:
+                    debug_print(f"DEBUG: Exception emitting signal: {e}")
+                    pass
+        except Exception as e:
+            debug_print(f"DEBUG: showEvent exception: {e}")
+            import traceback
+            debug_print(f"DEBUG: {traceback.format_exc()}")
+            pass
+
+    def hideEvent(self, event):
+        """Called when the widget becomes hidden - ensure window constraints are cleared on Steam Deck"""
+        super().hideEvent(event)
+        try:
+            # Check if we're on Steam Deck
+            is_steamdeck = False
+            if self.system_info and getattr(self.system_info, 'is_steamdeck', False):
+                is_steamdeck = True
+            else:
+                main_window = self.window()
+                if main_window and hasattr(main_window, 'system_info'):
+                    is_steamdeck = getattr(main_window.system_info, 'is_steamdeck', False)
+            
+            # On Steam Deck, clear any size constraints that might have been set
+            # This prevents window size issues affecting other screens after exiting TTW screen
+            if is_steamdeck:
+                debug_print("DEBUG: Steam Deck detected in hideEvent, clearing window constraints")
+                main_window = self.window()
+                if main_window:
+                    from PySide6.QtCore import QSize
+                    # Clear any size constraints that might have been set
+                    main_window.setMaximumSize(QSize(16777215, 16777215))
+                    main_window.setMinimumSize(QSize(0, 0))
+        except Exception as e:
+            debug_print(f"DEBUG: hideEvent exception: {e}")
+            pass
 
     def _load_saved_parent_directories(self):
         """No-op: do not pre-populate install/download directories from saved values."""
@@ -856,7 +871,6 @@ class InstallModlistScreen(QWidget):
             saved_download_parent = self.config_handler.get_default_download_parent_dir()
             if saved_download_parent:
                 suggested_download_dir = os.path.join(saved_download_parent, "Downloads")
-                self.downloads_dir_edit.setText(suggested_download_dir)
                 debug_print(f"DEBUG: Updated download directory suggestion: {suggested_download_dir}")
                 
         except Exception as e:
@@ -866,182 +880,13 @@ class InstallModlistScreen(QWidget):
         """Removed automatic saving - user should set defaults in settings"""
         pass
 
-    def _on_api_key_text_changed(self, text):
-        """Handle API key text changes for obfuscation timing"""
-        if not self.api_key_is_obfuscated:
-            self.api_key_original_text = text
-            # Restart the obfuscation timer (3 seconds after last change)
-            self.api_key_obfuscation_timer.stop()
-            if text.strip():  # Only start timer if there's actual text
-                self.api_key_obfuscation_timer.start(3000)  # 3 seconds
-        else:
-            # If currently obfuscated and user is typing/pasting, un-obfuscate
-            if text != self.api_key_service.get_api_key_display(self.api_key_original_text):
-                self.api_key_is_obfuscated = False
-                self.api_key_original_text = text
-                if text.strip():
-                    self.api_key_obfuscation_timer.start(3000)
-    
-    def _on_api_key_focus_in(self, event):
-        """Handle API key field gaining focus - de-obfuscate if needed"""
-        # Call the original focusInEvent first
-        QLineEdit.focusInEvent(self.api_key_edit, event)
-        if self.api_key_is_obfuscated:
-            self.api_key_edit.blockSignals(True)
-            self.api_key_edit.setText(self.api_key_original_text)
-            self.api_key_is_obfuscated = False
-            self.api_key_edit.blockSignals(False)
-        self.api_key_obfuscation_timer.stop()
 
-    def _on_api_key_focus_out(self, event):
-        """Handle API key field losing focus - immediately obfuscate"""
-        QLineEdit.focusOutEvent(self.api_key_edit, event)
-        self._obfuscate_api_key()
 
-    def _obfuscate_api_key(self):
-        """Obfuscate the API key text field"""
-        if not self.api_key_is_obfuscated and self.api_key_original_text.strip():
-            # Block signals to prevent recursion
-            self.api_key_edit.blockSignals(True)
-            # Show masked version
-            masked_text = self.api_key_service.get_api_key_display(self.api_key_original_text)
-            self.api_key_edit.setText(masked_text)
-            self.api_key_is_obfuscated = True
-            # Re-enable signals
-            self.api_key_edit.blockSignals(False)
-    
-    def _get_actual_api_key(self):
-        """Get the actual API key value (not the obfuscated version)"""
-        if self.api_key_is_obfuscated:
-            return self.api_key_original_text
-        else:
-            return self.api_key_edit.text()
 
-    def open_game_type_dialog(self):
-        dlg = SelectionDialog("Select Game Type", self.game_types, self, show_search=False)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_item:
-            self.game_type_btn.setText(dlg.selected_item)
-            self.fetch_modlists_for_game_type(dlg.selected_item)
 
-    def fetch_modlists_for_game_type(self, game_type):
-        self.current_game_type = game_type  # Store for display formatting
-        self.modlist_btn.setText("Fetching modlists...")
-        self.modlist_btn.setEnabled(False)
-        game_type_map = {
-            "Skyrim": "skyrim",
-            "Fallout 4": "fallout4",
-            "Fallout New Vegas": "falloutnv",
-            "Oblivion": "oblivion",
-            "Starfield": "starfield",
-            "Oblivion Remastered": "oblivion_remastered",
-            "Enderal": "enderal",
-            "Other": "other"
-        }
-        cli_game_type = game_type_map.get(game_type, "other")
-        log_path = self.modlist_log_path
-        # Use backend service directly - NO CLI CALLS
-        self.fetch_thread = ModlistFetchThread(
-            cli_game_type, log_path, mode='list-modlists')
-        self.fetch_thread.result.connect(self.on_modlists_fetched)
-        self.fetch_thread.start()
-
-    def on_modlists_fetched(self, modlist_infos, error):
-        # Handle the case where modlist_infos might be strings (backward compatibility)
-        if modlist_infos and isinstance(modlist_infos[0], str):
-            # Old format - just IDs as strings
-            filtered = [m for m in modlist_infos if m and not m.startswith('DEBUG:')]
-            self.current_modlists = filtered
-            self.current_modlist_display = filtered
-        else:
-            # New format - full modlist objects with enhanced metadata
-            filtered_modlists = [m for m in modlist_infos if m and hasattr(m, 'id')]
-            filtered = filtered_modlists  # Set filtered for the condition check below
-            self.current_modlists = [m.id for m in filtered_modlists]  # Keep IDs for selection
-            
-            # Create enhanced display strings with size info and status indicators
-            display_strings = []
-            for modlist in filtered_modlists:
-                # Get enhanced metadata
-                download_size = getattr(modlist, 'download_size', '')
-                install_size = getattr(modlist, 'install_size', '')
-                total_size = getattr(modlist, 'total_size', '')
-                status_down = getattr(modlist, 'status_down', False)
-                status_nsfw = getattr(modlist, 'status_nsfw', False)
-                
-                # Format display string without redundant game type: "Modlist Name - Download|Install|Total"
-                # For "Other" category, include game type in brackets for clarity
-                # Use padding to create alignment: left-aligned name, right-aligned sizes
-                if hasattr(self, 'current_game_type') and self.current_game_type == "Other":
-                    name_part = f"{modlist.name} [{modlist.game}]"
-                else:
-                    name_part = modlist.name
-                size_part = f"{download_size}|{install_size}|{total_size}"
-                
-                # Create aligned display using string formatting (approximate alignment)
-                display_str = f"{name_part:<50} {size_part:>15}"
-                
-                # Add status indicators at the beginning if present
-                if status_down or status_nsfw:
-                    status_parts = []
-                    if status_down:
-                        status_parts.append("[DOWN]")
-                    if status_nsfw:
-                        status_parts.append("[NSFW]") 
-                    display_str = " ".join(status_parts) + " " + display_str
-                
-                display_strings.append(display_str)
-            
-            self.current_modlist_display = display_strings
-        
-        # Create mapping from display string back to modlist ID for selection
-        self._modlist_id_map = {}
-        if len(self.current_modlist_display) == len(self.current_modlists):
-            self._modlist_id_map = {display: modlist_id for display, modlist_id in 
-                                  zip(self.current_modlist_display, self.current_modlists)}
-        else:
-            # Fallback for backward compatibility
-            self._modlist_id_map = {mid: mid for mid in self.current_modlists}
-        if error:
-            self.modlist_btn.setText("Error fetching modlists.")
-            self.modlist_btn.setEnabled(False)
-            # Don't write to log file before workflow starts - just show error in UI
-        elif filtered:
-            self.modlist_btn.setText("Select Modlist")
-            self.modlist_btn.setEnabled(True)
-        else:
-            self.modlist_btn.setText("No modlists found.")
-            self.modlist_btn.setEnabled(False)
-
-    def open_modlist_dialog(self):
-        if not self.current_modlist_display:
-            return
-        dlg = SelectionDialog("Select Modlist", self.current_modlist_display, self, show_search=True, placeholder_text="Search modlists...", show_legend=True)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_item:
-            modlist_id = self._modlist_id_map.get(dlg.selected_item, dlg.selected_item)
-            self.modlist_btn.setText(modlist_id)
-            # Fetch and store the full ModlistInfo for unsupported game detection
-            try:
-                from jackify.backend.services.modlist_service import ModlistService
-                from jackify.backend.models.configuration import SystemInfo
-                is_steamdeck = False
-                if os.path.exists('/etc/os-release'):
-                    with open('/etc/os-release') as f:
-                        if 'steamdeck' in f.read().lower():
-                            is_steamdeck = True
-                system_info = SystemInfo(is_steamdeck=is_steamdeck)
-                modlist_service = ModlistService(system_info)
-                all_modlists = modlist_service.list_modlists()
-                selected_info = next((m for m in all_modlists if m.id == modlist_id), None)
-                self.selected_modlist_info = selected_info.to_dict() if selected_info else None
-                
-                # Auto-populate the Modlist Name field with the display name (user can still modify)
-                if selected_info and selected_info.name:
-                    self.modlist_name_edit.setText(selected_info.name)
-            except Exception as e:
-                self.selected_modlist_info = None
 
     def browse_wabbajack_file(self):
-        file, _ = QFileDialog.getOpenFileName(self, "Select .wabbajack File", os.path.expanduser("~"), "Wabbajack Files (*.wabbajack)")
+        file, _ = QFileDialog.getOpenFileName(self, "Select TTW .mpi File", os.path.expanduser("~"), "MPI Files (*.mpi);;All Files (*)")
         if file:
             self.file_edit.setText(file)
 
@@ -1050,10 +895,6 @@ class InstallModlistScreen(QWidget):
         if dir:
             self.install_dir_edit.setText(dir)
 
-    def browse_downloads_dir(self):
-        dir = QFileDialog.getExistingDirectory(self, "Select Downloads Directory", self.downloads_dir_edit.text())
-        if dir:
-            self.downloads_dir_edit.setText(dir)
 
     def go_back(self):
         if self.stacked_widget:
@@ -1092,266 +933,29 @@ class InstallModlistScreen(QWidget):
         """Check if protontricks is available before critical operations"""
         try:
             is_installed, installation_type, details = self.protontricks_service.detect_protontricks()
-
+            
             if not is_installed:
                 # Show protontricks error dialog
                 from jackify.frontends.gui.dialogs.protontricks_error_dialog import ProtontricksErrorDialog
                 dialog = ProtontricksErrorDialog(self.protontricks_service, self)
                 result = dialog.exec()
-
+                
                 if result == QDialog.Rejected:
                     return False
-
+                
                 # Re-check after dialog
                 is_installed, _, _ = self.protontricks_service.detect_protontricks(use_cache=False)
                 return is_installed
-
+            
             return True
-
+            
         except Exception as e:
             print(f"Error checking protontricks: {e}")
-            MessageService.warning(self, "Protontricks Check Failed",
+            MessageService.warning(self, "Protontricks Check Failed", 
                                  f"Unable to verify protontricks installation: {e}\n\n"
                                  "Continuing anyway, but some features may not work correctly.")
             return True  # Continue anyway
 
-    def _check_ttw_eligibility(self, modlist_name: str, game_type: str, install_dir: str) -> bool:
-        """Check if modlist is FNV, TTW-compatible, and doesn't already have TTW
-
-        Args:
-            modlist_name: Name of the installed modlist
-            game_type: Game type (e.g., 'falloutnv')
-            install_dir: Modlist installation directory
-
-        Returns:
-            bool: True if should offer TTW integration
-        """
-        try:
-            # Check 1: Must be Fallout New Vegas
-            if game_type.lower() not in ['falloutnv', 'fallout new vegas', 'fallout_new_vegas']:
-                return False
-
-            # Check 2: Must be on whitelist
-            from jackify.backend.data.ttw_compatible_modlists import is_ttw_compatible
-            if not is_ttw_compatible(modlist_name):
-                return False
-
-            # Check 3: TTW must not already be installed
-            if self._detect_existing_ttw(install_dir):
-                debug_print("DEBUG: TTW already installed, skipping prompt")
-                return False
-
-            return True
-
-        except Exception as e:
-            debug_print(f"DEBUG: Error checking TTW eligibility: {e}")
-            return False
-
-    def _detect_existing_ttw(self, install_dir: str) -> bool:
-        """Check if TTW is already installed in the modlist
-
-        Args:
-            install_dir: Modlist installation directory
-
-        Returns:
-            bool: True if TTW is already present
-        """
-        try:
-            from pathlib import Path
-
-            mods_dir = Path(install_dir) / "mods"
-            if not mods_dir.exists():
-                return False
-
-            # Check for folders containing "Tale of Two Wastelands" that have actual TTW content
-            # Exclude separators and placeholder folders
-            for folder in mods_dir.iterdir():
-                if not folder.is_dir():
-                    continue
-
-                folder_name_lower = folder.name.lower()
-
-                # Skip separator folders and placeholders
-                if "_separator" in folder_name_lower or "put" in folder_name_lower or "here" in folder_name_lower:
-                    continue
-
-                # Check if folder name contains TTW indicator
-                if "tale of two wastelands" in folder_name_lower:
-                    # Verify it has actual TTW content by checking for the main ESM
-                    ttw_esm = folder / "TaleOfTwoWastelands.esm"
-                    if ttw_esm.exists():
-                        debug_print(f"DEBUG: Found existing TTW installation: {folder.name}")
-                        return True
-                    else:
-                        debug_print(f"DEBUG: Found TTW folder but no ESM, skipping: {folder.name}")
-
-            return False
-
-        except Exception as e:
-            debug_print(f"DEBUG: Error detecting existing TTW: {e}")
-            return False  # Assume not installed on error
-
-    def _initiate_ttw_workflow(self, modlist_name: str, install_dir: str):
-        """Navigate to TTW screen and set it up for modlist integration
-
-        Args:
-            modlist_name: Name of the modlist that needs TTW integration
-            install_dir: Path to the modlist installation directory
-        """
-        try:
-            # Store modlist context for later use when TTW completes
-            self._ttw_modlist_name = modlist_name
-            self._ttw_install_dir = install_dir
-
-            # Get reference to TTW screen BEFORE navigation
-            if self.stacked_widget:
-                ttw_screen = self.stacked_widget.widget(5)
-
-                # Set integration mode BEFORE navigating to avoid showEvent race condition
-                if hasattr(ttw_screen, 'set_modlist_integration_mode'):
-                    ttw_screen.set_modlist_integration_mode(modlist_name, install_dir)
-
-                    # Connect to completion signal to show success dialog after TTW
-                    if hasattr(ttw_screen, 'integration_complete'):
-                        ttw_screen.integration_complete.connect(self._on_ttw_integration_complete)
-                else:
-                    debug_print("WARNING: TTW screen does not support modlist integration mode yet")
-
-                # Navigate to TTW screen AFTER setting integration mode
-                self.stacked_widget.setCurrentIndex(5)
-
-                # Force collapsed state shortly after navigation to avoid any
-                # showEvent/layout timing races that may leave it expanded
-                try:
-                    from PySide6.QtCore import QTimer
-                    QTimer.singleShot(50, lambda: getattr(ttw_screen, 'force_collapsed_state', lambda: None)())
-                except Exception:
-                    pass
-
-        except Exception as e:
-            debug_print(f"ERROR: Failed to initiate TTW workflow: {e}")
-            MessageService.critical(
-                self,
-                "TTW Navigation Failed",
-                f"Failed to navigate to TTW installation screen: {str(e)}"
-            )
-
-    def _on_ttw_integration_complete(self, success: bool, ttw_version: str = ""):
-        """Handle completion of TTW integration and show final success dialog
-
-        Args:
-            success: Whether TTW integration completed successfully
-            ttw_version: Version of TTW that was installed
-        """
-        try:
-            if not success:
-                MessageService.critical(
-                    self,
-                    "TTW Integration Failed",
-                    "Tale of Two Wastelands integration did not complete successfully."
-                )
-                return
-
-            # Navigate back to this screen to show success dialog
-            if self.stacked_widget:
-                self.stacked_widget.setCurrentIndex(4)
-
-            # Build success message including TTW installation
-            modlist_name = getattr(self, '_ttw_modlist_name', 'Unknown')
-            time_str = getattr(self, '_elapsed_time_str', '0m 0s')
-            game_name = "Fallout New Vegas"
-
-            # Show enhanced success dialog
-            success_dialog = SuccessDialog(
-                modlist_name=modlist_name,
-                workflow_type="install",
-                time_taken=time_str,
-                game_name=game_name,
-                parent=self
-            )
-
-            # Add TTW installation info to dialog if possible
-            if hasattr(success_dialog, 'add_info_line'):
-                success_dialog.add_info_line(f"TTW {ttw_version} integrated successfully")
-
-            success_dialog.show()
-
-        except Exception as e:
-            debug_print(f"ERROR: Failed to show final success dialog: {e}")
-            MessageService.critical(
-                self,
-                "Display Error",
-                f"TTW integration completed but failed to show success dialog: {str(e)}"
-            )
-
-    def _on_api_key_save_toggled(self, checked):
-        """Handle immediate API key saving with silent validation when checkbox is toggled"""
-        try:
-            if checked:
-                # Save API key if one is entered
-                api_key = self._get_actual_api_key().strip()
-                if api_key:
-                    # Silently validate API key first
-                    is_valid, validation_message = self.api_key_service.validate_api_key_works(api_key)
-                    if not is_valid:
-                        # Show error dialog for invalid API key
-                        from jackify.frontends.gui.services.message_service import MessageService
-                        MessageService.critical(
-                            self, 
-                            "Invalid API Key", 
-                            f"The API key is invalid and cannot be saved.\n\nError: {validation_message}", 
-                            safety_level="low"
-                        )
-                        self.save_api_key_checkbox.setChecked(False)  # Uncheck on validation failure
-                        return
-                    
-                    # API key is valid, proceed with saving
-                    success = self.api_key_service.save_api_key(api_key)
-                    if success:
-                        self._show_api_key_feedback("✓ API key saved successfully", is_success=True)
-                        debug_print("DEBUG: API key validated and saved immediately on checkbox toggle")
-                    else:
-                        self._show_api_key_feedback("✗ Failed to save API key - check permissions", is_success=False)
-                        # Uncheck the checkbox since save failed
-                        self.save_api_key_checkbox.setChecked(False)
-                        debug_print("DEBUG: Failed to save API key immediately")
-                else:
-                    self._show_api_key_feedback("Enter an API key first", is_success=False)
-                    # Uncheck the checkbox since no key to save
-                    self.save_api_key_checkbox.setChecked(False)
-            else:
-                # Clear saved API key when unchecked
-                if self.api_key_service.has_saved_api_key():
-                    success = self.api_key_service.clear_saved_api_key()
-                    if success:
-                        self._show_api_key_feedback("✓ API key cleared", is_success=True)
-                        debug_print("DEBUG: Saved API key cleared immediately on checkbox toggle")
-                    else:
-                        self._show_api_key_feedback("✗ Failed to clear API key", is_success=False)
-                        debug_print("DEBUG: Failed to clear API key")
-        except Exception as e:
-            self._show_api_key_feedback(f"✗ Error: {str(e)}", is_success=False)
-            self.save_api_key_checkbox.setChecked(False)
-            debug_print(f"DEBUG: Error in _on_api_key_save_toggled: {e}")
-    
-    def _show_api_key_feedback(self, message, is_success=True):
-        """Show temporary feedback message for API key operations"""
-        # Use tooltip for immediate feedback
-        color = "#22c55e" if is_success else "#ef4444"  # Green for success, red for error
-        self.save_api_key_checkbox.setToolTip(message)
-        
-        # Temporarily change checkbox style to show feedback
-        original_style = self.save_api_key_checkbox.styleSheet()
-        feedback_style = f"QCheckBox {{ color: {color}; font-weight: bold; }}"
-        self.save_api_key_checkbox.setStyleSheet(feedback_style)
-        
-        # Reset style and tooltip after 3 seconds
-        from PySide6.QtCore import QTimer
-        def reset_feedback():
-            self.save_api_key_checkbox.setStyleSheet(original_style)
-            self.save_api_key_checkbox.setToolTip("")
-        
-        QTimer.singleShot(3000, reset_feedback)
     
 
     def validate_and_start_install(self):
@@ -1361,56 +965,38 @@ class InstallModlistScreen(QWidget):
 
         # Reload config to pick up any settings changes made in Settings dialog
         self.config_handler.reload_config()
+        debug_print('DEBUG: Reloaded config from disk')
 
+        # Check TTW requirements first
+        if not self._check_ttw_requirements():
+            return
+        
         # Check protontricks before proceeding
         if not self._check_protontricks():
             return
-
+        
         # Disable all controls during installation (except Cancel)
         self._disable_controls_during_operation()
         
         try:
-            tab_index = self.source_tabs.currentIndex()
-            install_mode = 'online'
-            if tab_index == 1:  # .wabbajack File tab
-                modlist = self.file_edit.text().strip()
-                if not modlist or not os.path.isfile(modlist) or not modlist.endswith('.wabbajack'):
-                    MessageService.warning(self, "Invalid Modlist", "Please select a valid .wabbajack file.")
-                    self._enable_controls_after_operation()
-                    return
-                install_mode = 'file'
-            else:
-                modlist = self.modlist_btn.text().strip()
-                if not modlist or modlist in ("Select Modlist", "Fetching modlists...", "No modlists found.", "Error fetching modlists."):
-                    MessageService.warning(self, "Invalid Modlist", "Please select a valid modlist.")
-                    self._enable_controls_after_operation()
-                    return
-                
-                # For online modlists, use machine_url instead of display name
-                if hasattr(self, 'selected_modlist_info') and self.selected_modlist_info:
-                    machine_url = self.selected_modlist_info.get('machine_url')
-                    if machine_url:
-                        modlist = machine_url  # Use machine URL for installation
-                        debug_print(f"DEBUG: Using machine_url for installation: {machine_url}")
-                    else:
-                        debug_print("DEBUG: No machine_url found in selected_modlist_info, using display name")
+            # TTW only needs .mpi file
+            mpi_path = self.file_edit.text().strip()
+            if not mpi_path or not os.path.isfile(mpi_path) or not mpi_path.endswith('.mpi'):
+                MessageService.warning(self, "Invalid TTW File", "Please select a valid TTW .mpi file.")
+                self._enable_controls_after_operation()
+                return
             install_dir = self.install_dir_edit.text().strip()
-            downloads_dir = self.downloads_dir_edit.text().strip()
-            api_key = self._get_actual_api_key().strip()
-            modlist_name = self.modlist_name_edit.text().strip()
+            
+            # Validate required fields
             missing_fields = []
-            if not modlist_name:
-                missing_fields.append("Modlist Name")
             if not install_dir:
                 missing_fields.append("Install Directory")
-            if not downloads_dir:
-                missing_fields.append("Downloads Directory")
-            if not api_key:
-                missing_fields.append("Nexus API Key")
             if missing_fields:
                 MessageService.warning(self, "Missing Required Fields", f"Please fill in all required fields before starting the install:\n- " + "\n- ".join(missing_fields))
                 self._enable_controls_after_operation()
                 return
+            
+            # Validate install directory
             validation_handler = ValidationHandler()
             from pathlib import Path
             is_safe, reason = validation_handler.is_safe_install_directory(Path(install_dir))
@@ -1431,138 +1017,8 @@ class InstallModlistScreen(QWidget):
                         return
                 else:
                     return
-            if not os.path.isdir(downloads_dir):
-                create = MessageService.question(self, "Create Directory?",
-                    f"The downloads directory does not exist:\n{downloads_dir}\n\nWould you like to create it?",
-                    critical=False  # Non-critical, won't steal focus
-                )
-                if create == QMessageBox.Yes:
-                    try:
-                        os.makedirs(downloads_dir, exist_ok=True)
-                    except Exception as e:
-                        MessageService.critical(self, "Error", f"Failed to create downloads directory:\n{e}")
-                        return
-                else:
-                    return
-            # Handle API key saving BEFORE validation (to match settings dialog behavior)
-            if self.save_api_key_checkbox.isChecked():
-                if api_key:
-                    success = self.api_key_service.save_api_key(api_key)
-                    if success:
-                        debug_print("DEBUG: API key saved successfully")
-                    else:
-                        debug_print("DEBUG: Failed to save API key")
-            else:
-                # If checkbox is unchecked, clear any saved API key
-                if self.api_key_service.has_saved_api_key():
-                    self.api_key_service.clear_saved_api_key()
-                    debug_print("DEBUG: Saved API key cleared")
             
-            # Validate API key for installation purposes
-            if not api_key or not self.api_key_service._validate_api_key_format(api_key):
-                MessageService.warning(self, "Invalid API Key", "Please enter a valid Nexus API Key.")
-                return
-            
-            # Handle resolution saving
-            resolution = self.resolution_combo.currentText()
-            if resolution and resolution != "Leave unchanged":
-                success = self.resolution_service.save_resolution(resolution)
-                if success:
-                    debug_print(f"DEBUG: Resolution saved successfully: {resolution}")
-                else:
-                    debug_print("DEBUG: Failed to save resolution")
-            else:
-                # Clear saved resolution if "Leave unchanged" is selected
-                if self.resolution_service.has_saved_resolution():
-                    self.resolution_service.clear_saved_resolution()
-                    debug_print("DEBUG: Saved resolution cleared")
-            
-            # Handle parent directory saving
-            self._save_parent_directories(install_dir, downloads_dir)
-            
-            # Detect game type and check support
-            game_type = None
-            game_name = None
-            
-            if install_mode == 'file':
-                # Parse .wabbajack file to get game type
-                from pathlib import Path
-                wabbajack_path = Path(modlist)
-                result = self.wabbajack_parser.parse_wabbajack_game_type(wabbajack_path)
-                if result:
-                    if isinstance(result, tuple):
-                        game_type, raw_game_type = result
-                        # Get display name for the game
-                        display_names = {
-                            'skyrim': 'Skyrim',
-                            'fallout4': 'Fallout 4',
-                            'falloutnv': 'Fallout New Vegas',
-                            'oblivion': 'Oblivion',
-                            'starfield': 'Starfield',
-                            'oblivion_remastered': 'Oblivion Remastered',
-                            'enderal': 'Enderal'
-                        }
-                        if game_type == 'unknown' and raw_game_type:
-                            game_name = raw_game_type
-                        else:
-                            game_name = display_names.get(game_type, game_type)
-                    else:
-                        game_type = result
-                        display_names = {
-                            'skyrim': 'Skyrim',
-                            'fallout4': 'Fallout 4',
-                            'falloutnv': 'Fallout New Vegas',
-                            'oblivion': 'Oblivion',
-                            'starfield': 'Starfield',
-                            'oblivion_remastered': 'Oblivion Remastered',
-                            'enderal': 'Enderal'
-                        }
-                        game_name = display_names.get(game_type, game_type)
-            else:
-                # For online modlists, try to get game type from selected modlist
-                if hasattr(self, 'selected_modlist_info') and self.selected_modlist_info:
-                    game_name = self.selected_modlist_info.get('game', '')
-                    debug_print(f"DEBUG: Detected game_name from selected_modlist_info: '{game_name}'")
-                    
-                    # Map game name to game type
-                    game_mapping = {
-                        'skyrim special edition': 'skyrim',
-                        'skyrim': 'skyrim',
-                        'fallout 4': 'fallout4',
-                        'fallout new vegas': 'falloutnv',
-                        'oblivion': 'oblivion',
-                        'starfield': 'starfield',
-                        'oblivion_remastered': 'oblivion_remastered',
-                        'enderal': 'enderal',
-                        'enderal special edition': 'enderal'
-                    }
-                    game_type = game_mapping.get(game_name.lower())
-                    debug_print(f"DEBUG: Mapped game_name '{game_name}' to game_type: '{game_type}'")
-                    if not game_type:
-                        game_type = 'unknown'
-                        debug_print(f"DEBUG: Game type not found in mapping, setting to 'unknown'")
-                else:
-                    debug_print(f"DEBUG: No selected_modlist_info found")
-                    game_type = 'unknown'
-            
-            # Store game type and name for later use
-            self._current_game_type = game_type
-            self._current_game_name = game_name
-            
-            # Check if game is supported
-            debug_print(f"DEBUG: Checking if game_type '{game_type}' is supported")
-            debug_print(f"DEBUG: game_type='{game_type}', game_name='{game_name}'")
-            is_supported = self.wabbajack_parser.is_supported_game(game_type) if game_type else False
-            debug_print(f"DEBUG: is_supported_game('{game_type}') returned: {is_supported}")
-            
-            if game_type and not is_supported:
-                debug_print(f"DEBUG: Game '{game_type}' is not supported, showing dialog")
-                # Show unsupported game dialog
-                dialog = UnsupportedGameDialog(self, game_name)
-                if not dialog.show_dialog(self, game_name):
-                    # User cancelled
-                    return
-            
+            # Start TTW installation
             self.console.clear()
             self.process_monitor.clear()
             
@@ -1571,8 +1027,8 @@ class InstallModlistScreen(QWidget):
             self.cancel_btn.setVisible(False)
             self.cancel_install_btn.setVisible(True)
             
-            debug_print(f'DEBUG: Calling run_modlist_installer with modlist={modlist}, install_dir={install_dir}, downloads_dir={downloads_dir}, api_key={api_key[:6]}..., install_mode={install_mode}')
-            self.run_modlist_installer(modlist, install_dir, downloads_dir, api_key, install_mode)
+            debug_print(f'DEBUG: Calling run_ttw_installer with mpi_path={mpi_path}, install_dir={install_dir}')
+            self.run_ttw_installer(mpi_path, install_dir)
         except Exception as e:
             debug_print(f"DEBUG: Exception in validate_and_start_install: {e}")
             import traceback
@@ -1583,19 +1039,45 @@ class InstallModlistScreen(QWidget):
             self.cancel_install_btn.setVisible(False)
             debug_print(f"DEBUG: Controls re-enabled in exception handler")
 
-    def run_modlist_installer(self, modlist, install_dir, downloads_dir, api_key, install_mode='online'):
-        debug_print('DEBUG: run_modlist_installer called - USING THREADED BACKEND WRAPPER')
-        
+    def run_ttw_installer(self, mpi_path, install_dir):
+        debug_print('DEBUG: run_ttw_installer called - USING THREADED BACKEND WRAPPER')
+
+        # CRITICAL: Reload config from disk to pick up any settings changes from Settings dialog
+        # This ensures Proton version and winetricks settings are current
+        self.config_handler._load_config()
+
         # Rotate log file at start of each workflow run (keep 5 backups)
         from jackify.backend.handlers.logging_handler import LoggingHandler
         from pathlib import Path
         log_handler = LoggingHandler()
         log_handler.rotate_log_file_per_run(Path(self.modlist_log_path), backup_count=5)
-        
+
         # Clear console for fresh installation output
         self.console.clear()
-        self._safe_append_text("Starting modlist installation with custom progress handling...")
-        
+        self._safe_append_text("Starting TTW installation...")
+
+        # Show status banner and show details checkbox
+        self.status_banner.setVisible(True)
+        self.status_banner.setText("Initializing TTW installation...")
+        self.show_details_checkbox.setVisible(True)
+
+        # Reset banner to default blue color for new installation
+        self.status_banner.setStyleSheet(f"""
+            background-color: #2a2a2a;
+            color: {JACKIFY_COLOR_BLUE};
+            padding: 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 13px;
+        """)
+
+        self.ttw_start_time = time.time()
+
+        # Start a timer to update elapsed time
+        self.ttw_elapsed_timer = QTimer()
+        self.ttw_elapsed_timer.timeout.connect(self._update_ttw_elapsed_time)
+        self.ttw_elapsed_timer.start(1000)  # Update every second
+
         # Update UI state for installation
         self.start_btn.setEnabled(False)
         self.cancel_btn.setVisible(False)
@@ -1604,108 +1086,258 @@ class InstallModlistScreen(QWidget):
         # Create installation thread
         from PySide6.QtCore import QThread, Signal
         
-        class InstallationThread(QThread):
+        class TTWInstallationThread(QThread):
             output_received = Signal(str)
             progress_received = Signal(str)
             installation_finished = Signal(bool, str)
             
-            def __init__(self, modlist, install_dir, downloads_dir, api_key, modlist_name, install_mode='online'):
+            def __init__(self, mpi_path, install_dir):
                 super().__init__()
-                self.modlist = modlist
+                self.mpi_path = mpi_path
                 self.install_dir = install_dir
-                self.downloads_dir = downloads_dir
-                self.api_key = api_key
-                self.modlist_name = modlist_name
-                self.install_mode = install_mode
                 self.cancelled = False
-                self.process_manager = None
+                self.proc = None
             
             def cancel(self):
                 self.cancelled = True
-                if self.process_manager:
-                    self.process_manager.cancel()
+                try:
+                    if self.proc and self.proc.poll() is None:
+                        self.proc.terminate()
+                except Exception:
+                    pass
             
             def run(self):
                 try:
-                    engine_path = get_jackify_engine_path()
-                    if self.install_mode == 'file':
-                        cmd = [engine_path, "install", "-w", self.modlist, "-o", self.install_dir, "-d", self.downloads_dir]
-                    else:
-                        cmd = [engine_path, "install", "-m", self.modlist, "-o", self.install_dir, "-d", self.downloads_dir]
-                    
-                    # Check for debug mode and add --debug flag
+                    from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+                    from jackify.backend.handlers.filesystem_handler import FileSystemHandler
                     from jackify.backend.handlers.config_handler import ConfigHandler
+                    from jackify.backend.models.configuration import SystemInfo
+                    from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
+                    import subprocess, sys
+
+                    # Prepare backend config (do not run process here)
+                    filesystem_handler = FileSystemHandler()
                     config_handler = ConfigHandler()
-                    debug_mode = config_handler.get('debug_mode', False)
-                    if debug_mode:
-                        cmd.append('--debug')
-                        debug_print("DEBUG: Added --debug flag to jackify-engine command")
-                    env = os.environ.copy()
-                    env['NEXUS_API_KEY'] = self.api_key
-                    self.process_manager = ProcessManager(cmd, env=env, text=False)
-                    ansi_escape = re.compile(rb'\x1b\[[0-9;?]*[ -/]*[@-~]')
-                    buffer = b''
-                    last_was_blank = False
-                    while True:
+                    system_info = SystemInfo(is_steamdeck=False)
+                    hoolamike_handler = HoolamikeHandler(
+                        steamdeck=False,
+                        verbose=False,
+                        filesystem_handler=filesystem_handler,
+                        config_handler=config_handler
+                    )
+
+                    # Update config for TTW and save
+                    hoolamike_handler._update_hoolamike_config_for_ttw(
+                        Path(self.mpi_path), Path(self.install_dir)
+                    )
+                    if not hoolamike_handler.save_hoolamike_config():
+                        self.installation_finished.emit(False, "Failed to save hoolamike.yaml")
+                        return
+
+                    hoolamike_handler._check_hoolamike_installation()
+                    if not hoolamike_handler.hoolamike_executable_path:
+                        self.installation_finished.emit(False, "Hoolamike executable not found. Please install Hoolamike.")
+                        return
+
+                    cmd = [str(hoolamike_handler.hoolamike_executable_path), "tale-of-two-wastelands"]
+                    env = get_clean_subprocess_env()
+
+                    # Use info level to get progress bar updates from indicatif
+                    # Our output filtering will parse the progress indicators
+                    env['RUST_LOG'] = 'info'
+
+                    cwd = str(hoolamike_handler.hoolamike_app_install_path)
+
+                    # Stream output live to GUI
+                    self.proc = subprocess.Popen(
+                        cmd,
+                        cwd=cwd,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        bufsize=1,
+                        universal_newlines=True,
+                    )
+
+                    assert self.proc.stdout is not None
+                    for line in self.proc.stdout:
                         if self.cancelled:
-                            self.cancel()
                             break
-                        char = self.process_manager.read_stdout_char()
-                        if not char:
-                            break
-                        buffer += char
-                        while b'\n' in buffer or b'\r' in buffer:
-                            if b'\r' in buffer and (buffer.index(b'\r') < buffer.index(b'\n') if b'\n' in buffer else True):
-                                line, buffer = buffer.split(b'\r', 1)
-                                line = ansi_escape.sub(b'', line)
-                                decoded = line.decode('utf-8', errors='replace')
-                                self.progress_received.emit(decoded)
-                            elif b'\n' in buffer:
-                                line, buffer = buffer.split(b'\n', 1)
-                                line = ansi_escape.sub(b'', line)
-                                decoded = line.decode('utf-8', errors='replace')
-                                # Collapse multiple blank lines to one
-                                if decoded.strip() == '':
-                                    if not last_was_blank:
-                                        self.output_received.emit('')
-                                    last_was_blank = True
-                                else:
-                                    self.output_received.emit(decoded)
-                                    last_was_blank = False
-                    if buffer:
-                        line = ansi_escape.sub(b'', buffer)
-                        decoded = line.decode('utf-8', errors='replace')
-                        self.output_received.emit(decoded)
-                    self.process_manager.wait()
+                        self.output_received.emit(line.rstrip())
+
+                    returncode = self.proc.wait()
                     if self.cancelled:
                         self.installation_finished.emit(False, "Installation cancelled by user")
-                    elif self.process_manager.proc.returncode == 0:
-                        self.installation_finished.emit(True, "Installation completed successfully")
+                    elif returncode == 0:
+                        self.installation_finished.emit(True, "TTW installation completed successfully!")
                     else:
-                        self.installation_finished.emit(False, "Installation failed")
+                        self.installation_finished.emit(False, f"TTW installation failed with exit code {returncode}")
+
                 except Exception as e:
                     self.installation_finished.emit(False, f"Installation error: {str(e)}")
-                finally:
-                    if self.cancelled and self.process_manager:
-                        self.process_manager.cancel()
 
-        # After the InstallationThread class definition, add:
-        self.install_thread = InstallationThread(
-            modlist, install_dir, downloads_dir, api_key, self.modlist_name_edit.text().strip(), install_mode
-        )
+        # Start the installation thread
+        self.install_thread = TTWInstallationThread(mpi_path, install_dir)
         self.install_thread.output_received.connect(self.on_installation_output)
         self.install_thread.progress_received.connect(self.on_installation_progress)
         self.install_thread.installation_finished.connect(self.on_installation_finished)
         self.install_thread.start()
 
     def on_installation_output(self, message):
-        """Handle regular output from installation thread"""
+        """Handle regular output from installation thread with smart progress parsing"""
         # Filter out internal status messages from user console
         if message.strip().startswith('[Jackify]'):
             # Log internal messages to file but don't show in console
             self._write_to_log_file(message)
             return
-        self._safe_append_text(message)
+
+        # Strip ANSI terminal control codes (cursor movement, line clearing, etc.)
+        cleaned = strip_ansi_control_codes(message).strip()
+
+        # Filter out empty lines after stripping control codes
+        if not cleaned:
+            return
+
+        # If user asked to see details, show the raw cleaned line first (INFO-level verbosity)
+        try:
+            if self.show_details_checkbox.isChecked():
+                self._safe_append_text(cleaned)
+        except Exception:
+            pass
+
+        import re
+
+        # Try to extract total asset count from the completion message
+        success_match = re.search(r'succesfully installed \[(\d+)\] assets', cleaned)
+        if success_match:
+            total = int(success_match.group(1))
+            if not hasattr(self, 'ttw_asset_count'):
+                self.ttw_asset_count = 0
+
+            # Cache this total for future installs in config
+            from jackify.backend.handlers.config_handler import ConfigHandler
+            config_handler = ConfigHandler()
+            config_handler.set('ttw_asset_count_cache', total)
+
+            self._safe_append_text(f"\nInstallation complete: {total} assets processed successfully!")
+            return
+
+        # Parse progress bar lines: "▕bar▏(123/456 ETA 10m ELAPSED 5m) handling_assets"
+        progress_match = re.search(r'\((\d+)/(\d+)\s+ETA\s+([^\)]+)\)\s*(.*)', cleaned)
+        if progress_match:
+            current = int(progress_match.group(1))
+            total = int(progress_match.group(2))
+
+            # Store total for later use
+            if not hasattr(self, 'ttw_total_assets'):
+                self.ttw_total_assets = total
+
+            task = progress_match.group(4).strip() or "Processing"
+            percent = int((current / total) * 100) if total > 0 else 0
+            elapsed = int(time.time() - self.ttw_start_time) if hasattr(self, 'ttw_start_time') else 0
+            elapsed_min = elapsed // 60
+            elapsed_sec = elapsed % 60
+
+            self.status_banner.setText(
+                f"{task}: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+            )
+
+            # Show progress updates every 100 assets in console (keep it minimal)
+            if current % 100 == 0:
+                self._safe_append_text(f"Progress: {current}/{total} assets ({percent}%)")
+            return
+
+        lower_cleaned = cleaned.lower()
+
+        # Detect phases and extract useful information
+        if 'extracting_manifest' in cleaned:
+            self._safe_append_text("Extracting TTW manifest from .mpi file...")
+            return
+
+        if 'handling_assets_for_location' in cleaned:
+            # Parse location being processed
+            location_match = re.search(r'location=([^}]+)', cleaned)
+            if location_match:
+                location = location_match.group(1).strip()
+                self._safe_append_text(f"Processing location: {location}")
+            return
+
+        if 'building_archive' in cleaned:
+            self._safe_append_text("Building BSA archives...")
+            return
+
+        # Filter out variable resolution spam (MAGICALLY messages)
+        if 'magically' in lower_cleaned or 'variable_name=' in cleaned or 'resolve_variable' in cleaned:
+            # Extract total from manifest if present
+            if 'got manifest file' in lower_cleaned:
+                self._safe_append_text("Loading TTW manifest...")
+            return
+
+        # Use known asset count for TTW 3.4
+        # Actual count: 215,396 assets (measured from complete installation of TTW 3.4)
+        # This will need updating if TTW releases a new version
+        if 'got manifest file' in lower_cleaned and not hasattr(self, 'ttw_total_assets'):
+            self.ttw_total_assets = 215396
+            self._safe_append_text(f"Loading TTW manifest ({self.ttw_total_assets:,} assets)...")
+            return
+
+        # Filter out ALL per-asset processing messages
+        if 'handling_asset{kind=' in cleaned:
+            # Track progress by counting these messages
+            if not hasattr(self, 'ttw_asset_count'):
+                self.ttw_asset_count = 0
+            self.ttw_asset_count += 1
+
+            # Update banner every 10 assets processed
+            if self.ttw_asset_count % 10 == 0:
+                elapsed = int(time.time() - self.ttw_start_time) if hasattr(self, 'ttw_start_time') else 0
+                elapsed_min = elapsed // 60
+                elapsed_sec = elapsed % 60
+
+                # Show with total if we have it
+                if hasattr(self, 'ttw_total_assets'):
+                    percent = int((self.ttw_asset_count / self.ttw_total_assets) * 100)
+                    self.status_banner.setText(
+                        f"Processing assets... {self.ttw_asset_count}/{self.ttw_total_assets} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+                    )
+                else:
+                    self.status_banner.setText(
+                        f"Processing assets... ({self.ttw_asset_count} completed) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+                    )
+
+            return  # Don't show per-asset messages in console
+
+        # Filter out per-file verbose messages
+        if 'wrote [' in cleaned and 'bytes]' in cleaned:
+            return
+
+        if '[ok]' in lower_cleaned:
+            return  # Skip all [OK] messages
+
+        # Filter out version/metadata spam at start
+        if any(x in lower_cleaned for x in ['install:installing_ttw', 'title=', 'version=', 'author=', 'description=']):
+            if 'installing_ttw{' in cleaned:
+                # Extract just the version/title cleanly
+                version_match = re.search(r'version=([\d.]+)\s+title=([^}]+)', cleaned)
+                if version_match:
+                    self._safe_append_text(f"Installing {version_match.group(2)} v{version_match.group(1)}")
+            return
+
+        # Keep important messages: errors, warnings, completions
+        important_keywords = [
+            'error', 'warning', 'failed', 'patch applied'
+        ]
+
+        # Show only important messages
+        if any(kw in lower_cleaned for kw in important_keywords):
+            # Strip out emojis if present
+            cleaned_no_emoji = re.sub(r'[⭐☢️🩹]', '', cleaned)
+            self._safe_append_text(cleaned_no_emoji.strip())
+
+            # Auto-expand console on errors/warnings
+            if any(kw in lower_cleaned for kw in ['error', 'warning', 'failed']):
+                if not self.show_details_checkbox.isChecked():
+                    self.show_details_checkbox.setChecked(True)
     
     def on_installation_progress(self, progress_message):
         """Replace the last line in the console for progress updates"""
@@ -1716,15 +1348,50 @@ class InstallModlistScreen(QWidget):
         cursor.insertText(progress_message)
         # Don't force scroll for progress updates - let user control
     
+    def _update_ttw_elapsed_time(self):
+        """Update status banner with elapsed time"""
+        if hasattr(self, 'ttw_start_time'):
+            elapsed = int(time.time() - self.ttw_start_time)
+            minutes = elapsed // 60
+            seconds = elapsed % 60
+            self.status_banner.setText(f"Processing Tale of Two Wastelands installation... Elapsed: {minutes}m {seconds}s")
+
     def on_installation_finished(self, success, message):
         """Handle installation completion"""
         debug_print(f"DEBUG: on_installation_finished called with success={success}, message={message}")
+
+        # Stop elapsed timer
+        if hasattr(self, 'ttw_elapsed_timer'):
+            self.ttw_elapsed_timer.stop()
+
+        # Update status banner
         if success:
+            elapsed = int(time.time() - self.ttw_start_time) if hasattr(self, 'ttw_start_time') else 0
+            minutes = elapsed // 60
+            seconds = elapsed % 60
+            self.status_banner.setText(f"Installation completed successfully! Total time: {minutes}m {seconds}s")
+            self.status_banner.setStyleSheet(f"""
+                background-color: #1a4d1a;
+                color: #4CAF50;
+                padding: 8px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 13px;
+            """)
             self._safe_append_text(f"\nSuccess: {message}")
-            self.process_finished(0, QProcess.NormalExit)  # Simulate successful completion
+            self.process_finished(0, QProcess.NormalExit)
         else:
+            self.status_banner.setText(f"Installation failed: {message}")
+            self.status_banner.setStyleSheet(f"""
+                background-color: #4d1a1a;
+                color: #f44336;
+                padding: 8px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 13px;
+            """)
             self._safe_append_text(f"\nError: {message}")
-            self.process_finished(1, QProcess.CrashExit)  # Simulate error
+            self.process_finished(1, QProcess.CrashExit)
 
     def process_finished(self, exit_code, exit_status):
         debug_print(f"DEBUG: process_finished called with exit_code={exit_code}, exit_status={exit_status}")
@@ -1736,53 +1403,34 @@ class InstallModlistScreen(QWidget):
         
 
         if exit_code == 0:
-            # Check if this was an unsupported game
-            game_type = getattr(self, '_current_game_type', None)
-            game_name = getattr(self, '_current_game_name', None)
-            
-            if game_type and not self.wabbajack_parser.is_supported_game(game_type):
-                # Show success message for unsupported games without post-install configuration
-                MessageService.information(
-                    self, "Modlist Install Complete!",
-                    f"Modlist installation completed successfully!\n\n"
-                    f"Note: Post-install configuration was skipped for unsupported game type: {game_name or game_type}\n\n"
-                    f"You will need to manually configure Steam shortcuts and other post-install steps."
-                )
-                self._safe_append_text(f"\nModlist installation completed successfully.")
-                self._safe_append_text(f"\nWarning: Post-install configuration skipped for unsupported game: {game_name or game_type}")
+            # TTW installation complete
+            self._safe_append_text("\nTTW installation completed successfully!")
+            self._safe_append_text("The merged TTW files have been created in the output directory.")
+
+            # Check if we're in modlist integration mode
+            if self._integration_mode:
+                self._safe_append_text("\nIntegrating TTW into modlist...")
+                self._perform_modlist_integration()
             else:
-                # Check if auto-restart is enabled
-                auto_restart_enabled = hasattr(self, 'auto_restart_checkbox') and self.auto_restart_checkbox.isChecked()
-                
-                if auto_restart_enabled:
-                    # Auto-accept Steam restart - proceed without dialog
-                    self._safe_append_text("\nAuto-accepting Steam restart (unattended mode enabled)")
-                    reply = QMessageBox.Yes  # Simulate user clicking Yes
-                else:
-                    # Show the normal install complete dialog for supported games
-                    reply = MessageService.question(
-                        self, "Modlist Install Complete!",
-                        "Modlist install complete!\n\nWould you like to add this modlist to Steam and configure it now? Steam will restart, closing any game you have open!",
-                        critical=False  # Non-critical, won't steal focus
-                    )
-                
+                # Standard mode - ask user if they want to create a mod archive for MO2
+                reply = MessageService.question(
+                    self, "TTW Installation Complete!",
+                    "Tale of Two Wastelands installation completed successfully!\n\n"
+                    f"Output location: {self.install_dir_edit.text()}\n\n"
+                    "Would you like to create a zipped mod archive for MO2?\n"
+                    "This will package the TTW files for easy installation into Mod Organizer 2.",
+                    critical=False
+                )
+
                 if reply == QMessageBox.Yes:
-                    # --- Create Steam shortcut BEFORE restarting Steam ---
-                    # Proceed directly to automated prefix creation
-                    self.start_automated_prefix_workflow()
+                    self._create_ttw_mod_archive()
                 else:
-                    # User selected "No" - show completion message and keep GUI open
-                    self._safe_append_text("\nModlist installation completed successfully!")
-                    self._safe_append_text("Note: You can manually configure Steam integration later if needed.")
                     MessageService.information(
-                        self, "Installation Complete", 
-                        "Modlist installation completed successfully!\n\n"
-                        "The modlist has been installed but Steam integration was skipped.\n"
-                        "You can manually add the modlist to Steam later if desired.",
+                        self, "Installation Complete",
+                        "TTW installation complete!\n\n"
+                        "You can manually use the TTW files from the output directory.",
                         safety_level="medium"
                     )
-                    # Re-enable controls since operation is complete
-                    self._enable_controls_after_operation()
         else:
             # Check for user cancellation first
             last_output = self.console.toPlainText()
@@ -1825,6 +1473,129 @@ class InstallModlistScreen(QWidget):
         scrollbar = self.console.verticalScrollBar()
         if scrollbar.value() >= scrollbar.maximum() - 1:
             self._user_manually_scrolled = False
+
+    def _on_show_details_toggled(self, checked: bool):
+        from PySide6.QtCore import Qt as _Qt
+        self._toggle_console_visibility(_Qt.Checked if checked else _Qt.Unchecked)
+
+    def _toggle_console_visibility(self, state):
+        """Toggle console visibility and resize main window"""
+        is_checked = (state == Qt.Checked)
+        main_window = self.window()
+
+        if not main_window:
+            return
+
+        # Check if we're on Steam Deck
+        is_steamdeck = False
+        if self.system_info and getattr(self.system_info, 'is_steamdeck', False):
+            is_steamdeck = True
+        elif not self.system_info and main_window and hasattr(main_window, 'system_info'):
+            is_steamdeck = getattr(main_window.system_info, 'is_steamdeck', False)
+
+        # Console height when expanded
+        console_height = 300
+
+        if is_checked:
+            # Show console
+            self.console.setVisible(True)
+            self.console.show()
+            self.console.setMinimumHeight(200)
+            self.console.setMaximumHeight(16777215)
+            try:
+                self.console.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            except Exception:
+                pass
+            try:
+                self.main_overall_vbox.setStretchFactor(self.console, 1)
+            except Exception:
+                pass
+
+            # On Steam Deck, skip window resizing - keep default Steam Deck window size
+            if is_steamdeck:
+                debug_print("DEBUG: Steam Deck detected, skipping window resize in _toggle_console_visibility")
+                return
+
+            # Restore main window to normal size (clear any compact constraints)
+            main_window.showNormal()
+            main_window.setMaximumHeight(16777215)
+            main_window.setMinimumHeight(0)
+            # Restore original minimum size so the window can expand normally
+            try:
+                if self._saved_min_size is not None:
+                    main_window.setMinimumSize(self._saved_min_size)
+            except Exception:
+                pass
+            # Prefer exact original geometry if known
+            if self._saved_geometry is not None:
+                main_window.setGeometry(self._saved_geometry)
+            else:
+                expanded_min = 900
+                current_size = main_window.size()
+                target_height = max(expanded_min, 900)
+                main_window.setMinimumHeight(expanded_min)
+                main_window.resize(current_size.width(), target_height)
+            try:
+                # Encourage layouts to recompute sizes
+                self.main_overall_vbox.invalidate()
+                self.updateGeometry()
+            except Exception:
+                pass
+            # Notify parent to expand
+            try:
+                self.resize_request.emit('expand')
+            except Exception:
+                pass
+        else:
+            # Hide console fully (removes it from layout sizing)
+            self.console.setVisible(False)
+            self.console.hide()
+            self.console.setMinimumHeight(0)
+            self.console.setMaximumHeight(0)
+            try:
+                # Make the hidden console contribute no expand pressure
+                self.console.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            except Exception:
+                pass
+            try:
+                self.main_overall_vbox.setStretchFactor(self.console, 0)
+            except Exception:
+                pass
+
+            # On Steam Deck, skip window resizing to keep maximized state
+            if is_steamdeck:
+                debug_print("DEBUG: Steam Deck detected, skipping window resize in collapse branch")
+                return
+
+            # Shrink main window to a compact height so no extra space remains
+            # Use the screen's sizeHint to choose a minimal-but-safe height (tighter)
+            size_hint = self.sizeHint().height()
+            new_min_height = max(440, min(540, size_hint + 20))
+            main_window.showNormal()
+            # Temporarily clamp max to enforce the smaller collapsed size; parent clears on expand
+            main_window.setMaximumHeight(new_min_height)
+            main_window.setMinimumHeight(new_min_height)
+            # Lower the main window minimum size vertically so it can collapse
+            try:
+                from PySide6.QtCore import QSize
+                current_min = self._saved_min_size or main_window.minimumSize()
+                main_window.setMinimumSize(QSize(current_min.width(), new_min_height))
+            except Exception:
+                pass
+
+            # Resize to compact height to avoid leftover space
+            current_size = main_window.size()
+            main_window.resize(current_size.width(), new_min_height)
+            try:
+                self.main_overall_vbox.invalidate()
+                self.updateGeometry()
+            except Exception:
+                pass
+            # Notify parent to collapse
+            try:
+                self.resize_request.emit('collapse')
+            except Exception:
+                pass
 
     def _safe_append_text(self, text):
         """Append text with professional auto-scroll behavior"""
@@ -1915,18 +1686,8 @@ class InstallModlistScreen(QWidget):
             
             # Save context for later use in configuration
             self._manual_steps_retry_count = 0
-            self._current_modlist_name = self.modlist_name_edit.text().strip()
-            
-            # Save resolution for later use in configuration
-            resolution = self.resolution_combo.currentText()
-            # Extract resolution properly (e.g., "1280x800" from "1280x800 (Steam Deck)")
-            if resolution != "Leave unchanged":
-                if " (" in resolution:
-                    self._current_resolution = resolution.split(" (")[0]
-                else:
-                    self._current_resolution = resolution
-            else:
-                self._current_resolution = None
+            self._current_modlist_name = "TTW Installation"  # Fixed name for TTW
+            self._current_resolution = None  # TTW doesn't need resolution changes
             
             # Use automated prefix creation instead of manual steps
             debug_print("DEBUG: Starting automated prefix creation workflow")
@@ -1937,14 +1698,9 @@ class InstallModlistScreen(QWidget):
             MessageService.critical(self, "Steam Restart Failed", "Failed to restart Steam automatically. Please restart Steam manually, then try again.")
 
     def start_automated_prefix_workflow(self):
-        """Start the automated prefix creation workflow"""
-        # CRITICAL: Reload config from disk to pick up any settings changes from Settings dialog
-        # This ensures Proton version and winetricks settings are current
-        self.config_handler._load_config()
-
         # Ensure _current_resolution is always set before starting workflow
         if not hasattr(self, '_current_resolution') or self._current_resolution is None:
-            resolution = self.resolution_combo.currentText() if hasattr(self, 'resolution_combo') else None
+            resolution = None  # TTW doesn't need resolution changes
             # Extract resolution properly (e.g., "1280x800" from "1280x800 (Steam Deck)")
             if resolution and resolution != "Leave unchanged":
                 if " (" in resolution:
@@ -1953,11 +1709,11 @@ class InstallModlistScreen(QWidget):
                     self._current_resolution = resolution
             else:
                 self._current_resolution = None
-
+        """Start the automated prefix creation workflow"""
         try:
             # Disable controls during installation
             self._disable_controls_during_operation()
-            modlist_name = self.modlist_name_edit.text().strip()
+            modlist_name = "TTW Installation"
             install_dir = self.install_dir_edit.text().strip()
             final_exe_path = os.path.join(install_dir, "ModOrganizer.exe")
             
@@ -2097,7 +1853,7 @@ class InstallModlistScreen(QWidget):
                 new_appid = int(new_appid_str) if new_appid_str and new_appid_str != "0" else None
                 
                 # Continue with configuration using the new AppID and timestamp
-                modlist_name = self.modlist_name_edit.text().strip()
+                modlist_name = "TTW Installation"
                 install_dir = self.install_dir_edit.text().strip()
                 self.continue_configuration_after_automated_prefix(new_appid, modlist_name, install_dir, last_timestamp)
             else:
@@ -2180,31 +1936,6 @@ class InstallModlistScreen(QWidget):
                     'enderal': 'Enderal'
                 }
                 game_name = display_names.get(self._current_game_type, self._current_game_name)
-
-                # Check for TTW eligibility before showing final success dialog
-                install_dir = self.install_dir_edit.text().strip()
-                if self._check_ttw_eligibility(modlist_name, self._current_game_type, install_dir):
-                    # Offer TTW installation
-                    reply = MessageService.question(
-                        self,
-                        "Install TTW?",
-                        f"{modlist_name} requires Tale of Two Wastelands!\n\n"
-                        "Would you like to install and configure TTW automatically now?\n\n"
-                        "This will:\n"
-                        "• Guide you through TTW installation\n"
-                        "• Automatically integrate TTW into your modlist\n"
-                        "• Configure load order correctly\n\n"
-                        "Note: TTW installation can take a while. You can also install TTW later from Additional Tasks & Tools.",
-                        critical=False,
-                        safety_level="medium"
-                    )
-
-                    if reply == QMessageBox.Yes:
-                        # Navigate to TTW screen
-                        self._initiate_ttw_workflow(modlist_name, install_dir)
-                        return  # Don't show success dialog yet, will show after TTW completes
-
-                # Show normal success dialog
                 success_dialog = SuccessDialog(
                     modlist_name=modlist_name,
                     workflow_type="install",
@@ -2264,7 +1995,7 @@ class InstallModlistScreen(QWidget):
             self.config_thread = None
 
     def show_manual_steps_dialog(self, extra_warning=""):
-        modlist_name = self.modlist_name_edit.text().strip() or "your modlist"
+        modlist_name = "TTW Installation"
         msg = (
             f"<b>Manual Proton Setup Required for <span style='color:#3fd0ea'>{modlist_name}</span></b><br>"
             "After Steam restarts, complete the following steps in Steam:<br>"
@@ -2302,7 +2033,7 @@ class InstallModlistScreen(QWidget):
 
     def validate_manual_steps_completion(self):
         """Validate that manual steps were actually completed and handle retry logic"""
-        modlist_name = self.modlist_name_edit.text().strip()
+        modlist_name = "TTW Installation"
         install_dir = self.install_dir_edit.text().strip()
         mo2_exe_path = self._get_mo2_path(install_dir, modlist_name)
         
@@ -2423,7 +2154,7 @@ class InstallModlistScreen(QWidget):
         conflict_names = [c['name'] for c in conflicts]
         conflict_info = f"Found existing Steam shortcut: '{conflict_names[0]}'"
         
-        modlist_name = self.modlist_name_edit.text().strip()
+        modlist_name = "TTW Installation"
         
         # Create dialog with Jackify styling
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout
@@ -2531,8 +2262,7 @@ class InstallModlistScreen(QWidget):
     def retry_automated_workflow_with_new_name(self, new_name):
         """Retry the automated workflow with a new shortcut name"""
         # Update the modlist name field temporarily
-        original_name = self.modlist_name_edit.text()
-        self.modlist_name_edit.setText(new_name)
+        # TTW doesn't need name editing
         
         # Restart the automated workflow
         self._safe_append_text(f"Retrying with new shortcut name: '{new_name}'")
@@ -2850,17 +2580,241 @@ class InstallModlistScreen(QWidget):
                     thread.terminate()
                     thread.wait(1000)  # Wait up to 1 second
     
+    def _perform_modlist_integration(self):
+        """Integrate TTW into the modlist automatically
+
+        This is called when in integration mode. It will:
+        1. Copy TTW output to modlist's mods folder
+        2. Update modlist.txt for all profiles
+        3. Update plugins.txt with TTW ESMs in correct order
+        4. Emit integration_complete signal
+        """
+        try:
+            from pathlib import Path
+            import re
+            from PySide6.QtCore import QThread, Signal
+
+            # Get TTW output directory
+            ttw_output_dir = Path(self.install_dir_edit.text())
+            if not ttw_output_dir.exists():
+                error_msg = f"TTW output directory not found: {ttw_output_dir}"
+                self._safe_append_text(f"\nError: {error_msg}")
+                self.integration_complete.emit(False, "")
+                return
+
+            # Extract version from .mpi filename
+            mpi_path = self.file_edit.text().strip()
+            ttw_version = ""
+            if mpi_path:
+                mpi_filename = Path(mpi_path).stem
+                version_match = re.search(r'v?(\d+\.\d+(?:\.\d+)?)', mpi_filename, re.IGNORECASE)
+                if version_match:
+                    ttw_version = version_match.group(1)
+
+            # Create background thread for integration
+            class IntegrationThread(QThread):
+                finished = Signal(bool, str)  # success, ttw_version
+                progress = Signal(str)  # progress message
+
+                def __init__(self, ttw_output_path, modlist_install_dir, ttw_version):
+                    super().__init__()
+                    self.ttw_output_path = ttw_output_path
+                    self.modlist_install_dir = modlist_install_dir
+                    self.ttw_version = ttw_version
+
+                def run(self):
+                    try:
+                        from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+
+                        self.progress.emit("Integrating TTW into modlist...")
+                        success = HoolamikeHandler.integrate_ttw_into_modlist(
+                            ttw_output_path=self.ttw_output_path,
+                            modlist_install_dir=self.modlist_install_dir,
+                            ttw_version=self.ttw_version
+                        )
+                        self.finished.emit(success, self.ttw_version)
+                    except Exception as e:
+                        debug_print(f"ERROR: Integration thread failed: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        self.finished.emit(False, self.ttw_version)
+
+            # Show progress message
+            self._safe_append_text("\nIntegrating TTW into modlist (this may take a few minutes)...")
+
+            # Update status banner (only in integration mode - visible when collapsed)
+            if self._integration_mode:
+                self.status_banner.setText("Integrating TTW into modlist (this may take a few minutes)...")
+                self.status_banner.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: #FFA500;
+                        color: white;
+                        font-weight: bold;
+                        padding: 8px;
+                        border-radius: 5px;
+                    }}
+                """)
+
+            # Create and start integration thread
+            self.integration_thread = IntegrationThread(
+                ttw_output_dir,
+                Path(self._integration_install_dir),
+                ttw_version
+            )
+            self.integration_thread.progress.connect(self._safe_append_text)
+            self.integration_thread.finished.connect(self._on_integration_thread_finished)
+            self.integration_thread.start()
+
+        except Exception as e:
+            error_msg = f"Integration error: {str(e)}"
+            self._safe_append_text(f"\nError: {error_msg}")
+            debug_print(f"ERROR: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            self.integration_complete.emit(False, "")
+
+    def _on_integration_thread_finished(self, success: bool, ttw_version: str):
+        """Handle completion of integration thread"""
+        try:
+            if success:
+                self._safe_append_text("\nTTW integration completed successfully!")
+
+                # Update status banner (only in integration mode)
+                if self._integration_mode:
+                    self.status_banner.setText("TTW integration completed successfully!")
+                    self.status_banner.setStyleSheet(f"""
+                        QLabel {{
+                            background-color: #28a745;
+                            color: white;
+                            font-weight: bold;
+                            padding: 8px;
+                            border-radius: 5px;
+                        }}
+                    """)
+
+                MessageService.information(
+                    self, "Integration Complete",
+                    f"TTW {ttw_version} has been successfully integrated into {self._integration_modlist_name}!",
+                    safety_level="medium"
+                )
+                self.integration_complete.emit(True, ttw_version)
+            else:
+                self._safe_append_text("\nTTW integration failed!")
+
+                # Update status banner (only in integration mode)
+                if self._integration_mode:
+                    self.status_banner.setText("TTW integration failed!")
+                    self.status_banner.setStyleSheet(f"""
+                        QLabel {{
+                            background-color: #dc3545;
+                            color: white;
+                            font-weight: bold;
+                            padding: 8px;
+                            border-radius: 5px;
+                        }}
+                    """)
+
+                MessageService.critical(
+                    self, "Integration Failed",
+                    "Failed to integrate TTW into the modlist. Check the log for details."
+                )
+                self.integration_complete.emit(False, ttw_version)
+        except Exception as e:
+            debug_print(f"ERROR: Failed to handle integration completion: {e}")
+            self.integration_complete.emit(False, ttw_version)
+
+    def _create_ttw_mod_archive(self, automated=False):
+        """Create a zipped mod archive of TTW output for MO2 installation.
+
+        Args:
+            automated: If True, runs silently without user prompts (for automation)
+        """
+        try:
+            from pathlib import Path
+            import shutil
+            import re
+
+            output_dir = Path(self.install_dir_edit.text())
+            if not output_dir.exists():
+                if not automated:
+                    MessageService.warning(self, "Output Directory Not Found",
+                                         f"Output directory does not exist:\n{output_dir}")
+                return False
+
+            # Extract version from .mpi filename (e.g., "TTW v3.4.mpi" -> "3.4")
+            mpi_path = self.file_edit.text().strip()
+            version_suffix = ""
+            if mpi_path:
+                mpi_filename = Path(mpi_path).stem  # Get filename without extension
+                # Look for version pattern like "3.4", "v3.4", etc.
+                version_match = re.search(r'v?(\d+\.\d+(?:\.\d+)?)', mpi_filename, re.IGNORECASE)
+                if version_match:
+                    version_suffix = f" {version_match.group(1)}"
+
+            # Create archive filename - [NoDelete] prefix is used by MO2 workflows
+            archive_name = f"[NoDelete] Tale of Two Wastelands{version_suffix}"
+
+            # Place archive in parent directory of output
+            archive_path = output_dir.parent / archive_name
+
+            if not automated:
+                self._safe_append_text(f"\nCreating mod archive: {archive_name}.zip")
+                self._safe_append_text("This may take several minutes...")
+
+            # Create the zip archive
+            # shutil.make_archive returns the path without .zip extension
+            final_archive = shutil.make_archive(
+                str(archive_path),  # base name (without extension)
+                'zip',              # format
+                str(output_dir)     # directory to archive
+            )
+
+            if not automated:
+                self._safe_append_text(f"\nArchive created successfully: {Path(final_archive).name}")
+                MessageService.information(
+                    self, "Archive Created",
+                    f"TTW mod archive created successfully!\n\n"
+                    f"Location: {final_archive}\n\n"
+                    f"You can now install this archive as a mod in MO2.",
+                    safety_level="medium"
+                )
+
+            return True
+
+        except Exception as e:
+            error_msg = f"Failed to create mod archive: {str(e)}"
+            if not automated:
+                self._safe_append_text(f"\nError: {error_msg}")
+                MessageService.critical(self, "Archive Creation Failed", error_msg)
+            return False
+
     def cancel_installation(self):
         """Cancel the currently running installation"""
         reply = MessageService.question(
-            self, "Cancel Installation", 
+            self, "Cancel Installation",
             "Are you sure you want to cancel the installation?",
             critical=False  # Non-critical, won't steal focus
         )
-        
+
         if reply == QMessageBox.Yes:
-            self._safe_append_text("\n🛑 Cancelling installation...")
-            
+            self._safe_append_text("\nCancelling installation...")
+
+            # Stop the elapsed timer if running
+            if hasattr(self, 'ttw_elapsed_timer') and self.ttw_elapsed_timer.isActive():
+                self.ttw_elapsed_timer.stop()
+
+            # Update status banner
+            if hasattr(self, 'status_banner'):
+                self.status_banner.setText("Installation cancelled by user")
+                self.status_banner.setStyleSheet(f"""
+                    background-color: #4d3d1a;
+                    color: #FFA500;
+                    padding: 8px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 13px;
+                """)
+
             # Cancel the installation thread if it exists
             if hasattr(self, 'install_thread') and self.install_thread.isRunning():
                 self.install_thread.cancel()
@@ -2918,36 +2872,61 @@ https://wiki.scenicroute.games/Somnium/1_Installation.html</i>"""
     def cancel_and_cleanup(self):
         """Handle Cancel button - clean up processes and go back"""
         self.cleanup_processes()
+        # Restore main window to standard Jackify size before leaving
+        try:
+            from PySide6.QtCore import Qt as _Qt
+            main_window = self.window()
+            
+            # Check if we're on Steam Deck - if so, skip all window size modifications
+            is_steamdeck = False
+            if self.system_info and getattr(self.system_info, 'is_steamdeck', False):
+                is_steamdeck = True
+            elif not self.system_info and main_window and hasattr(main_window, 'system_info'):
+                is_steamdeck = getattr(main_window.system_info, 'is_steamdeck', False)
+            
+            if main_window and not is_steamdeck:
+                # Desktop: Restore main window to standard Jackify size
+                main_window.setMaximumHeight(16777215)
+                main_window.setMinimumHeight(900)
+                # Prefer a sane default height; keep current width
+                current_width = max(1200, main_window.size().width())
+                main_window.resize(current_width, 900)
+            elif is_steamdeck:
+                # Steam Deck: Only clear any constraints that might exist, don't set new ones
+                # This prevents window size issues when navigating away
+                debug_print("DEBUG: Steam Deck detected in cancel_and_cleanup, skipping window resize")
+                if main_window:
+                    # Clear any size constraints that might have been set
+                    from PySide6.QtCore import QSize
+                    main_window.setMaximumSize(QSize(16777215, 16777215))
+                    main_window.setMinimumSize(QSize(0, 0))
+            
+            # Ensure we exit in collapsed state so next entry starts compact (both Desktop and Deck)
+            if self.show_details_checkbox.isChecked():
+                self.show_details_checkbox.blockSignals(True)
+                self.show_details_checkbox.setChecked(False)
+                self.show_details_checkbox.blockSignals(False)
+                # Only toggle console visibility on Desktop (on Deck it's always visible)
+                if not is_steamdeck:
+                    self._toggle_console_visibility(_Qt.Unchecked)
+        except Exception:
+            pass
         self.go_back()
     
     def reset_screen_to_defaults(self):
         """Reset the screen to default state when navigating back from main menu"""
         # Reset form fields
-        self.modlist_btn.setText("Select Modlist")
-        self.modlist_btn.setEnabled(False)
         self.file_edit.setText("")
-        self.modlist_name_edit.setText("")
         self.install_dir_edit.setText(self.config_handler.get_modlist_install_base_dir())
-        # Reset game type button
-        self.game_type_btn.setText("Please Select...")
 
         # Clear console and process monitor
         self.console.clear()
         self.process_monitor.clear()
 
-        # Reset tabs to first tab (Online)
-        self.source_tabs.setCurrentIndex(0)
-
-        # Reset resolution combo to saved config preference
-        saved_resolution = self.resolution_service.get_saved_resolution()
-        if saved_resolution:
-            combo_items = [self.resolution_combo.itemText(i) for i in range(self.resolution_combo.count())]
-            resolution_index = self.resolution_service.get_resolution_index(saved_resolution, combo_items)
-            self.resolution_combo.setCurrentIndex(resolution_index)
-        elif self.resolution_combo.count() > 0:
-            self.resolution_combo.setCurrentIndex(0)  # Fallback to "Leave unchanged"
-
         # Re-enable controls (in case they were disabled from previous errors)
         self._enable_controls_after_operation()
+
+        # Check requirements when screen is actually shown (not on app startup)
+        self.check_requirements()
 
  

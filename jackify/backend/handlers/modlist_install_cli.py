@@ -945,6 +945,9 @@ class ModlistInstallCLI:
             
             if configuration_success:
                 self.logger.info("Post-installation configuration completed successfully")
+
+                # Check for TTW integration eligibility
+                self._check_and_prompt_ttw_integration(install_dir_str, detected_game, modlist_name)
             else:
                 self.logger.warning("Post-installation configuration had issues")
         else:
@@ -1134,5 +1137,159 @@ class ModlistInstallCLI:
             
             # Add URL on next line for easier debugging
             return f"{line}\n  Nexus URL: {mod_url}"
-        
+
         return line
+
+    def _check_and_prompt_ttw_integration(self, install_dir: str, game_type: str, modlist_name: str):
+        """Check if modlist is eligible for TTW integration and prompt user"""
+        try:
+            # Check eligibility: FNV game, TTW-compatible modlist, no existing TTW
+            if not self._is_ttw_eligible(install_dir, game_type, modlist_name):
+                return
+
+            # Prompt user for TTW installation
+            print(f"\n{COLOR_PROMPT}═══════════════════════════════════════════════════════════════{COLOR_RESET}")
+            print(f"{COLOR_INFO}TTW Integration Available{COLOR_RESET}")
+            print(f"{COLOR_PROMPT}═══════════════════════════════════════════════════════════════{COLOR_RESET}")
+            print(f"\nThis modlist ({modlist_name}) supports Tale of Two Wastelands (TTW).")
+            print(f"TTW combines Fallout 3 and New Vegas into a single game.")
+            print(f"\nWould you like to install TTW now?")
+
+            user_input = input(f"{COLOR_PROMPT}Install TTW? (yes/no): {COLOR_RESET}").strip().lower()
+
+            if user_input in ['yes', 'y']:
+                self._launch_ttw_installation(modlist_name, install_dir)
+            else:
+                print(f"{COLOR_INFO}Skipping TTW installation. You can install it later from the main menu.{COLOR_RESET}")
+
+        except Exception as e:
+            self.logger.error(f"Error during TTW eligibility check: {e}", exc_info=True)
+
+    def _is_ttw_eligible(self, install_dir: str, game_type: str, modlist_name: str) -> bool:
+        """Check if modlist is eligible for TTW integration"""
+        try:
+            from pathlib import Path
+
+            # Check 1: Must be Fallout New Vegas
+            if not game_type or game_type.lower() not in ['falloutnv', 'fallout new vegas', 'fallout_new_vegas']:
+                return False
+
+            # Check 2: Must be on TTW compatibility whitelist
+            from jackify.backend.data.ttw_compatible_modlists import is_ttw_compatible
+            if not is_ttw_compatible(modlist_name):
+                return False
+
+            # Check 3: TTW must not already be installed
+            if self._detect_existing_ttw(install_dir):
+                self.logger.info(f"TTW already installed in {install_dir}, skipping prompt")
+                return False
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error checking TTW eligibility: {e}")
+            return False
+
+    def _detect_existing_ttw(self, install_dir: str) -> bool:
+        """Detect if TTW is already installed in the modlist"""
+        try:
+            from pathlib import Path
+
+            install_path = Path(install_dir)
+
+            # Search for TTW indicators in common locations
+            search_paths = [
+                install_path,
+                install_path / "mods",
+                install_path / "Stock Game",
+                install_path / "Game Root"
+            ]
+
+            for search_path in search_paths:
+                if not search_path.exists():
+                    continue
+
+                # Look for folders containing "tale" and "two" and "wastelands"
+                for folder in search_path.iterdir():
+                    if not folder.is_dir():
+                        continue
+
+                    folder_name_lower = folder.name.lower()
+                    if all(keyword in folder_name_lower for keyword in ['tale', 'two', 'wastelands']):
+                        # Verify it has the TTW ESM file
+                        for file in folder.rglob('*.esm'):
+                            if 'taleoftwowastelands' in file.name.lower():
+                                self.logger.info(f"Found existing TTW installation: {file}")
+                                return True
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Error detecting existing TTW: {e}")
+            return False
+
+    def _launch_ttw_installation(self, modlist_name: str, install_dir: str):
+        """Launch TTW installation workflow"""
+        try:
+            print(f"\n{COLOR_INFO}Starting TTW installation workflow...{COLOR_RESET}")
+
+            # Import TTW installation handler
+            from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+            from jackify.backend.models.configuration import SystemInfo
+
+            system_info = SystemInfo()
+            hoolamike_handler = HoolamikeHandler(system_info)
+
+            # Check if Hoolamike is installed
+            is_installed, installed_version = hoolamike_handler.check_installation_status()
+
+            if not is_installed:
+                print(f"{COLOR_INFO}Hoolamike (TTW installer) is not installed.{COLOR_RESET}")
+                user_input = input(f"{COLOR_PROMPT}Install Hoolamike? (yes/no): {COLOR_RESET}").strip().lower()
+
+                if user_input not in ['yes', 'y']:
+                    print(f"{COLOR_INFO}TTW installation cancelled.{COLOR_RESET}")
+                    return
+
+                # Install Hoolamike
+                print(f"{COLOR_INFO}Installing Hoolamike...{COLOR_RESET}")
+                success, message = hoolamike_handler.install_hoolamike()
+
+                if not success:
+                    print(f"{COLOR_ERROR}Failed to install Hoolamike: {message}{COLOR_RESET}")
+                    return
+
+                print(f"{COLOR_INFO}Hoolamike installed successfully.{COLOR_RESET}")
+
+            # Get Hoolamike MPI path
+            mpi_path = hoolamike_handler.get_mpi_path()
+            if not mpi_path or not os.path.exists(mpi_path):
+                print(f"{COLOR_ERROR}Hoolamike MPI file not found at: {mpi_path}{COLOR_RESET}")
+                return
+
+            # Prompt for TTW installation directory
+            print(f"\n{COLOR_PROMPT}TTW Installation Directory{COLOR_RESET}")
+            print(f"Default: {os.path.join(install_dir, 'TTW')}")
+            ttw_install_dir = input(f"{COLOR_PROMPT}TTW install directory (Enter for default): {COLOR_RESET}").strip()
+
+            if not ttw_install_dir:
+                ttw_install_dir = os.path.join(install_dir, "TTW")
+
+            # Run Hoolamike installation
+            print(f"\n{COLOR_INFO}Installing TTW using Hoolamike...{COLOR_RESET}")
+            print(f"{COLOR_INFO}This may take a while (15-30 minutes depending on your system).{COLOR_RESET}")
+
+            success = hoolamike_handler.run_hoolamike_install(mpi_path, ttw_install_dir)
+
+            if success:
+                print(f"\n{COLOR_INFO}═══════════════════════════════════════════════════════════════{COLOR_RESET}")
+                print(f"{COLOR_INFO}TTW Installation Complete!{COLOR_RESET}")
+                print(f"{COLOR_PROMPT}═══════════════════════════════════════════════════════════════{COLOR_RESET}")
+                print(f"\nTTW has been installed to: {ttw_install_dir}")
+                print(f"The modlist '{modlist_name}' is now ready to use with TTW.")
+            else:
+                print(f"\n{COLOR_ERROR}TTW installation failed. Check the logs for details.{COLOR_RESET}")
+
+        except Exception as e:
+            self.logger.error(f"Error during TTW installation: {e}", exc_info=True)
+            print(f"{COLOR_ERROR}Error during TTW installation: {e}{COLOR_RESET}")

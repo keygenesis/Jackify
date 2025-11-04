@@ -20,10 +20,23 @@ logger = logging.getLogger(__name__)
 class ConfigHandler:
     """
     Handles application configuration and settings
+    Singleton pattern ensures all code shares the same instance
     """
-    
+    _instance = None
+    _initialized = False
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ConfigHandler, cls).__new__(cls)
+        return cls._instance
+
     def __init__(self):
         """Initialize configuration handler with default settings"""
+        # Only initialize once (singleton pattern)
+        if ConfigHandler._initialized:
+            return
+        ConfigHandler._initialized = True
+
         self.config_dir = os.path.expanduser("~/.config/jackify")
         self.config_file = os.path.join(self.config_dir, "config.json")
         self.settings = {
@@ -45,13 +58,14 @@ class ConfigHandler:
         
         # Load configuration if exists
         self._load_config()
-        
+
         # If steam_path is not set, detect it
         if not self.settings["steam_path"]:
             self.settings["steam_path"] = self._detect_steam_path()
 
-        # Auto-detect and set Proton version on first run
-        if not self.settings.get("proton_path"):
+        # Auto-detect and set Proton version ONLY on first run (config file doesn't exist)
+        # Do NOT overwrite user's saved settings!
+        if not os.path.exists(self.config_file) and not self.settings.get("proton_path"):
             self._auto_detect_proton()
         
         # If jackify_data_dir is not set, initialize it to default
@@ -113,6 +127,10 @@ class ConfigHandler:
                 self._create_config_dir()
         except Exception as e:
             logger.error(f"Error loading configuration: {e}")
+
+    def reload_config(self):
+        """Reload configuration from disk to pick up external changes"""
+        self._load_config()
     
     def _create_config_dir(self):
         """Create configuration directory if it doesn't exist"""
