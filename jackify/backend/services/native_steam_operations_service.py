@@ -135,6 +135,9 @@ class NativeSteamOperationsService:
         steam_locations = [
             Path.home() / ".steam/steam",
             Path.home() / ".local/share/Steam",
+            # Flatpak Steam - direct data directory
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+            # Flatpak Steam - symlinked home paths
             Path.home() / ".var/app/com.valvesoftware.Steam/home/.steam/steam",
             Path.home() / ".var/app/com.valvesoftware.Steam/home/.local/share/Steam"
         ]
@@ -161,6 +164,9 @@ class NativeSteamOperationsService:
         standard_locations = [
             Path.home() / ".steam/steam/steamapps/compatdata",
             Path.home() / ".local/share/Steam/steamapps/compatdata",
+            # Flatpak Steam - direct data directory
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/compatdata",
+            # Flatpak Steam - symlinked home paths
             Path.home() / ".var/app/com.valvesoftware.Steam/home/.steam/steam/steamapps/compatdata",
             Path.home() / ".var/app/com.valvesoftware.Steam/home/.local/share/Steam/steamapps/compatdata"
         ]

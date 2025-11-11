@@ -1,11 +1,33 @@
 # Jackify Changelog
 
+## v0.1.7.1 - Wine Component Verification & Flatpak Steam Fixes
+**Release Date:** November 11, 2025
+
+### Critical Bug Fixes
+- **FIXED: Wine Component Installation Verification** - Jackify now verifies components are actually installed before reporting success
+
+### Bug Fixes
+- **Steam Deck SD Card Paths**: Fixed ModOrganizer.ini path corruption on SD card installs using regex-based stripping
+- **Flatpak Steam Detection**: Fixed libraryfolders.vdf path detection for Flatpak Steam installations
+- **Flatpak Steam Restart**: Steam restart service now properly detects and controls Flatpak Steam
+- **Path Manipulation**: Fixed path corruption in Configure Existing/New Modlist (paths with spaces)
+
+### Improvements
+- Added network diagnostics before winetricks fallback to protontricks
+- Enhanced component installation logging with verification status
+- Added GE-Proton 10-14 recommendation to success message (ENB compatibility note for Valve's Proton 10)
+
+### Engine Updates
+- **jackify-engine 0.3.18**: Archive extraction fixes for Windows symlinks, bandwidth limiting fix, improved error messages
+
+---
+
 ## v0.1.7 - TTW Automation & Bug Fixes
 **Release Date:** November 1, 2025
 
 ### Major Features
 - **TTW (Tale of Two Wastelands) Installation and Automation**
-  - TTW Installation function using Hoolamike application - https://github.com/Niedzwiedzw/hoolamike
+laf  - TTW Installation function using Hoolamike application - https://github.com/Niedzwiedzw/hoolamike
   - Automated workflow for TTW installation and integration into FNV modlists, where possible
   - Automatic detection of TTW-compatible modlists
   - User prompt after modlist installation with option to install TTW

@@ -127,20 +127,18 @@ class ProtontricksDetectionService:
         try:
             env = handler._get_clean_subprocess_env()
             result = subprocess.run(
-                ["flatpak", "list"], 
-                capture_output=True, 
+                ["flatpak", "list"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,  # Suppress stderr to avoid error messages
                 text=True,
-                check=True,
                 env=env
             )
-            if "com.github.Matoking.protontricks" in result.stdout:
+            if result.returncode == 0 and "com.github.Matoking.protontricks" in result.stdout:
                 logger.info("Flatpak Protontricks is installed")
                 handler.which_protontricks = 'flatpak'
                 return True
         except FileNotFoundError:
             logger.warning("'flatpak' command not found. Cannot check for Flatpak Protontricks.")
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Error checking flatpak list: {e}")
         except Exception as e:
             logger.error(f"Unexpected error checking flatpak: {e}")
         

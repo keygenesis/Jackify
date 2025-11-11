@@ -100,7 +100,8 @@ class ConfigHandler:
         libraryfolders_vdf_paths = [
             os.path.expanduser("~/.steam/steam/config/libraryfolders.vdf"),
             os.path.expanduser("~/.local/share/Steam/config/libraryfolders.vdf"),
-            os.path.expanduser("~/.steam/root/config/libraryfolders.vdf")
+            os.path.expanduser("~/.steam/root/config/libraryfolders.vdf"),
+            os.path.expanduser("~/.var/app/com.valvesoftware.Steam/.local/share/Steam/config/libraryfolders.vdf")  # Flatpak
         ]
         
         for vdf_path in libraryfolders_vdf_paths:

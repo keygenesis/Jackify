@@ -390,7 +390,7 @@ class PathHandler:
         libraryfolders_vdf_paths = [
             os.path.expanduser("~/.steam/steam/config/libraryfolders.vdf"),
             os.path.expanduser("~/.local/share/Steam/config/libraryfolders.vdf"),
-            # Add other potential standard locations if necessary
+            os.path.expanduser("~/.var/app/com.valvesoftware.Steam/.local/share/Steam/config/libraryfolders.vdf"),  # Flatpak
         ]
         
         # Simple backup mechanism (optional but good practice)
@@ -622,7 +622,9 @@ class PathHandler:
                             m = re.search(r'"path"\s*"([^"]+)"', line)
                             if m:
                                 lib_path = Path(m.group(1))
-                                library_paths.add(lib_path)
+                                # Resolve symlinks for consistency (mmcblk0p1 -> deck/UUID)
+                                resolved_path = lib_path.resolve()
+                                library_paths.add(resolved_path)
                 except Exception as e:
                     logger.error(f"[DEBUG] Failed to parse {vdf_path}: {e}")
         logger.info(f"[DEBUG] All detected Steam libraries: {library_paths}")
@@ -871,10 +873,9 @@ class PathHandler:
                 else:
                     found_stock = None
                     for folder in STOCK_GAME_FOLDERS:
-                        folder_pattern = f"/{folder.replace(' ', '')}".lower()
-                        value_part_lower = value_part.replace(' ', '').lower()
-                        if folder_pattern in value_part_lower:
-                            idx = value_part_lower.index(folder_pattern)
+                        folder_pattern = f"/{folder}"
+                        if folder_pattern in value_part:
+                            idx = value_part.index(folder_pattern)
                             rel_path = value_part[idx:].lstrip('/')
                             found_stock = folder
                             break

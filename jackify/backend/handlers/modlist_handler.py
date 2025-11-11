@@ -329,22 +329,18 @@ class ModlistHandler:
         # On non-Steam Deck systems, /media mounts should use Z: drive, not D: drive
         is_on_sdcard_path = str(self.modlist_dir).startswith("/run/media") or str(self.modlist_dir).startswith("/media")
 
-        # DEBUG: Log SD card detection logic
-        self.logger.debug(f"[SD_CARD_DEBUG] SD card detection for instance id={id(self)}:")
-        self.logger.debug(f"[SD_CARD_DEBUG] modlist_dir: {self.modlist_dir}")
-        self.logger.debug(f"[SD_CARD_DEBUG] is_on_sdcard_path: {is_on_sdcard_path}")
-        self.logger.debug(f"[SD_CARD_DEBUG] self.steamdeck: {self.steamdeck}")
+        # Log SD card detection for debugging
+        self.logger.debug(f"SD card detection: modlist_dir={self.modlist_dir}, is_sdcard_path={is_on_sdcard_path}, steamdeck={self.steamdeck}")
 
         if is_on_sdcard_path and self.steamdeck:
              self.modlist_sdcard = True
              self.logger.info("Modlist appears to be on an SD card (Steam Deck).")
-             self.logger.debug(f"[SD_CARD_DEBUG] Set modlist_sdcard=True")
+             self.logger.debug(f"Set modlist_sdcard=True")
         else:
              self.modlist_sdcard = False
-             self.logger.debug(f"[SD_CARD_DEBUG] Set modlist_sdcard=False because: is_on_sdcard_path={is_on_sdcard_path} AND steamdeck={self.steamdeck}")
+             self.logger.debug(f"Set modlist_sdcard=False (is_on_sdcard_path={is_on_sdcard_path}, steamdeck={self.steamdeck})")
              if is_on_sdcard_path and not self.steamdeck:
                  self.logger.info("Modlist on /media mount detected on non-Steam Deck system - using Z: drive mapping.")
-                 self.logger.debug("[SD_CARD_DEBUG] This is the ROOT CAUSE - SD card path but steamdeck=False!")
 
         # Find and set compatdata path now that we have appid
         # Ensure PathHandler is available (should be initialized in __init__)
@@ -722,6 +718,8 @@ class ModlistHandler:
             success = self.winetricks_handler.install_wine_components(wineprefix, self.game_var_full, specific_components=components)
             if success:
                 self.logger.info("Wine component installation completed successfully")
+                if status_callback:
+                    status_callback(f"{self._get_progress_timestamp()} Wine components verified and installed successfully")
             else:
                 self.logger.error("Wine component installation failed")
                 print("Error: Failed to install necessary Wine components.")
@@ -751,6 +749,19 @@ class ModlistHandler:
             self.logger.error("Consider manually setting mscoree=native in winecfg if problems occur.")
             self.logger.error("=" * 80)
             # Continue but user should be aware of potential issues
+
+        # Step 4.6: Enable dotfiles visibility for Wine prefix
+        if status_callback:
+            status_callback(f"{self._get_progress_timestamp()} Enabling dotfiles visibility")
+        self.logger.info("Step 4.6: Enabling dotfiles visibility in Wine prefix...")
+        try:
+            if self.protontricks_handler.enable_dotfiles(self.appid):
+                self.logger.info("Dotfiles visibility enabled successfully")
+            else:
+                self.logger.warning("Failed to enable dotfiles visibility (non-critical, continuing)")
+        except Exception as e:
+            self.logger.warning(f"Error enabling dotfiles visibility: {e} (non-critical, continuing)")
+        self.logger.info("Step 4.6: Enabling dotfiles visibility... Done")
 
         # Step 5: Ensure permissions of Modlist directory
         if status_callback:

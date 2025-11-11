@@ -40,12 +40,12 @@ class SuccessDialog(QDialog):
         self.setWindowTitle("Success!")
         self.setWindowModality(Qt.NonModal)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setFixedSize(500, 420)
+        self.setFixedSize(500, 500)
         self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
         self.setStyleSheet("QDialog { background: #181818; color: #fff; border-radius: 12px; }" )
         layout = QVBoxLayout(self)
         layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(30, 30, 30, 30)
 
         # --- Card background for content ---
         card = QFrame(self)
@@ -53,6 +53,7 @@ class SuccessDialog(QDialog):
         card.setFrameShape(QFrame.StyledPanel)
         card.setFrameShadow(QFrame.Raised)
         card.setFixedWidth(440)
+        card.setMinimumHeight(380)
         card_layout = QVBoxLayout(card)
         card_layout.setSpacing(12)
         card_layout.setContentsMargins(28, 28, 28, 28)
@@ -64,23 +65,6 @@ class SuccessDialog(QDialog):
             "}"
         )
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        # Trophy icon (smaller, more subtle)
-        trophy_label = QLabel()
-        trophy_label.setAlignment(Qt.AlignCenter)
-        trophy_icon_path = Path(__file__).parent.parent.parent.parent.parent / "Files" / "trophy.png"
-        if trophy_icon_path.exists():
-            pixmap = QPixmap(str(trophy_icon_path)).scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            trophy_label.setPixmap(pixmap)
-        else:
-            trophy_label.setText("✓")
-            trophy_label.setStyleSheet(
-                "QLabel { "
-                "  font-size: 28px; "
-                "  margin-bottom: 4px; "
-                "}"
-            )
-        card_layout.addWidget(trophy_label)
 
         # Success title (less saturated green)
         title_label = QLabel("Success!")
@@ -137,11 +121,12 @@ class SuccessDialog(QDialog):
         next_steps_label = QLabel(next_steps_text)
         next_steps_label.setAlignment(Qt.AlignCenter)
         next_steps_label.setWordWrap(True)
+        next_steps_label.setMinimumHeight(100)
         next_steps_label.setStyleSheet(
             "QLabel { "
             "  font-size: 13px; "
             "  color: #b0b0b0; "
-            "  line-height: 1.2; "
+            "  line-height: 1.4; "
             "  padding: 6px; "
             "  background-color: transparent; "
             "  border-radius: 6px; "
@@ -232,15 +217,22 @@ class SuccessDialog(QDialog):
     def _build_next_steps(self) -> str:
         """
         Build the next steps guidance based on workflow type.
-        
+
         Returns:
             Formatted next steps string
         """
         game_display = self.game_name or self.modlist_name
+
+        base_message = ""
         if self.workflow_type == "tuxborn":
-            return f"You can now launch Tuxborn from Steam and enjoy your modded {game_display} experience!"
+            base_message = f"You can now launch Tuxborn from Steam and enjoy your modded {game_display} experience!"
         else:
-            return f"You can now launch {self.modlist_name} from Steam and enjoy your modded {game_display} experience!" 
+            base_message = f"You can now launch {self.modlist_name} from Steam and enjoy your modded {game_display} experience!"
+
+        # Add GE-Proton recommendation
+        proton_note = "\n\nNOTE: If you experience ENB issues, consider using GE-Proton 10-14 instead of Valve's Proton 10 (known ENB compatibility issues)."
+
+        return base_message + proton_note 
 
     def _update_countdown(self):
         if self._countdown > 0:

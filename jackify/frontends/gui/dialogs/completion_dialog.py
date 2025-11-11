@@ -183,7 +183,7 @@ class NextStepsDialog(QDialog):
     def _build_completion_text(self) -> str:
         """
         Build the completion text matching the CLI version from menu_handler.py.
-        
+
         Returns:
             Formatted completion text string
         """
@@ -195,6 +195,9 @@ Modlist Install and Configuration complete!:
   • You should now be able to Launch '{self.modlist_name}' through Steam.
   • Congratulations and enjoy the game!
 
+NOTE: If you experience ENB issues, consider using GE-Proton 10-14 instead of
+Valve's Proton 10 (known ENB compatibility issues in Valve's Proton 10).
+
 Detailed log available at: ~/Jackify/logs/Configure_New_Modlist_workflow.log"""
-        
+
         return completion_text 

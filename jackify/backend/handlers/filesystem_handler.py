@@ -784,7 +784,8 @@ class FileSystemHandler:
         possible_vdf_paths = [
             Path.home() / ".steam/steam/config/libraryfolders.vdf",
             Path.home() / ".local/share/Steam/config/libraryfolders.vdf",
-            Path.home() / ".steam/root/config/libraryfolders.vdf"
+            Path.home() / ".steam/root/config/libraryfolders.vdf",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/config/libraryfolders.vdf"  # Flatpak
         ]
         
         libraryfolders_vdf_path: Optional[Path] = None

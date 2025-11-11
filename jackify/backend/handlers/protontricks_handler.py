@@ -117,23 +117,21 @@ class ProtontricksHandler:
         try:
             # PyInstaller fix: Comprehensive environment cleaning for subprocess calls
             env = self._get_clean_subprocess_env()
-            
+
             result = subprocess.run(
-                ["flatpak", "list"], 
-                capture_output=True, 
+                ["flatpak", "list"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,  # Suppress stderr to avoid error messages when flatpak not installed
                 text=True,
-                check=True,
                 env=env  # Use comprehensively cleaned environment
             )
-            if "com.github.Matoking.protontricks" in result.stdout:
+            if result.returncode == 0 and "com.github.Matoking.protontricks" in result.stdout:
                 logger.info("Flatpak Protontricks is installed")
                 self.which_protontricks = 'flatpak'
                 flatpak_installed = True
                 return True
         except FileNotFoundError:
              logger.warning("'flatpak' command not found. Cannot check for Flatpak Protontricks.")
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Error checking flatpak list: {e}")
         except Exception as e:
             logger.error(f"Unexpected error checking flatpak: {e}")
 
@@ -707,8 +705,15 @@ class ProtontricksHandler:
                 result = self.run_protontricks("--no-bwrap", appid, "-q", *components_to_install, env=env, timeout=600)
                 self.logger.debug(f"Protontricks output: {result.stdout if result else ''}")
                 if result and result.returncode == 0:
-                    self.logger.info("Wine Component installation command completed successfully.")
-                    return True
+                    self.logger.info("Wine Component installation command completed.")
+
+                    # Verify components were actually installed
+                    if self._verify_components_installed(appid, components_to_install):
+                        self.logger.info("Component verification successful - all components installed correctly.")
+                        return True
+                    else:
+                        self.logger.error(f"Component verification failed (Attempt {attempt}/{max_attempts})")
+                        # Continue to retry
                 else:
                     self.logger.error(f"Protontricks command failed (Attempt {attempt}/{max_attempts}). Return Code: {result.returncode if result else 'N/A'}")
                     self.logger.error(f"Stdout: {result.stdout.strip() if result else ''}")
@@ -718,14 +723,73 @@ class ProtontricksHandler:
         self.logger.error(f"Failed to install Wine components after {max_attempts} attempts.")
         return False
     
+    def _verify_components_installed(self, appid: str, components: List[str]) -> bool:
+        """
+        Verify that Wine components were actually installed by querying protontricks.
+
+        Args:
+            appid: Steam AppID
+            components: List of components that should be installed
+
+        Returns:
+            bool: True if all critical components are verified, False otherwise
+        """
+        try:
+            self.logger.info("Verifying installed components...")
+
+            # Run protontricks list-installed to get actual installed components
+            result = self.run_protontricks("--no-bwrap", appid, "list-installed", timeout=30)
+
+            if not result or result.returncode != 0:
+                self.logger.error("Failed to query installed components")
+                self.logger.debug(f"list-installed stderr: {result.stderr if result else 'N/A'}")
+                return False
+
+            installed_output = result.stdout.lower()
+            self.logger.debug(f"Installed components output: {installed_output}")
+
+            # Define critical components that MUST be installed
+            # These are the core components that determine success
+            critical_components = ["vcrun2022", "xact"]
+
+            # Check for critical components
+            missing_critical = []
+            for component in critical_components:
+                if component.lower() not in installed_output:
+                    missing_critical.append(component)
+
+            if missing_critical:
+                self.logger.error(f"CRITICAL: Missing essential components: {missing_critical}")
+                self.logger.error("Installation reported success but components are NOT installed")
+                return False
+
+            # Check for requested components (warn but don't fail)
+            missing_requested = []
+            for component in components:
+                # Handle settings like fontsmooth=rgb (just check the base component name)
+                base_component = component.split('=')[0].lower()
+                if base_component not in installed_output and component.lower() not in installed_output:
+                    missing_requested.append(component)
+
+            if missing_requested:
+                self.logger.warning(f"Some requested components may not be installed: {missing_requested}")
+                self.logger.warning("This may cause issues, but critical components are present")
+
+            self.logger.info(f"Verification passed - critical components confirmed: {critical_components}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error verifying components: {e}", exc_info=True)
+            return False
+
     def _cleanup_wine_processes(self):
         """
         Internal method to clean up wine processes during component installation
         """
         try:
-            subprocess.run("pgrep -f 'win7|win10|ShowDotFiles|protontricks' | xargs -r kill -9", 
+            subprocess.run("pgrep -f 'win7|win10|ShowDotFiles|protontricks' | xargs -r kill -9",
                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run("pkill -9 winetricks", 
+            subprocess.run("pkill -9 winetricks",
                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             logger.error(f"Error cleaning up wine processes: {e}") 

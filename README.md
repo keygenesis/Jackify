@@ -77,6 +77,9 @@ Currently, there are two main functions that Jackify will perform at this stage 
 - **FUSE** (required for AppImage execution)
   - Pre-installed on most Linux distributions
   - If AppImage fails to run, install FUSE using your distribution's package manager
+- **Ubuntu/Debian only**: Qt platform plugin library
+  - `sudo apt install libxcb-cursor-dev`
+  - Required for Qt GUI to initialize properly
 
 ### Installation
 

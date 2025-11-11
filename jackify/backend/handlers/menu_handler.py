@@ -650,6 +650,10 @@ class ModlistMenuHandler:
         print("Modlist Install and Configuration complete!")
         print(f"• You should now be able to Launch '{context.get('name')}' through Steam")
         print("• Congratulations and enjoy the game!")
+        print("")
+        print("NOTE: If you experience ENB issues, consider using GE-Proton 10-14 instead of")
+        print("      Valve's Proton 10 (known ENB compatibility issues in Valve's Proton 10).")
+        print("")
         print("Detailed log available at: ~/Jackify/logs/Configure_New_Modlist_workflow.log")
         # Only wait for input in CLI mode, not GUI mode
         if not gui_mode:

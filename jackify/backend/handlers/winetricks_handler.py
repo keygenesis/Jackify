@@ -349,10 +349,17 @@ class WinetricksHandler:
 
                 self.logger.debug(f"Winetricks output: {result.stdout}")
                 if result.returncode == 0:
-                    self.logger.info("Wine Component installation command completed successfully.")
-                    # Set Windows 10 mode after component installation (matches legacy script timing)
-                    self._set_windows_10_mode(wineprefix, env.get('WINE', ''))
-                    return True
+                    self.logger.info("Wine Component installation command completed.")
+
+                    # Verify components were actually installed
+                    if self._verify_components_installed(wineprefix, components_to_install, env):
+                        self.logger.info("Component verification successful - all components installed correctly.")
+                        # Set Windows 10 mode after component installation (matches legacy script timing)
+                        self._set_windows_10_mode(wineprefix, env.get('WINE', ''))
+                        return True
+                    else:
+                        self.logger.error(f"Component verification failed (Attempt {attempt}/{max_attempts})")
+                        # Continue to retry
                 else:
                     # Special handling for dotnet40 verification issue (mimics protontricks behavior)
                     if "dotnet40" in components_to_install and "ngen.exe not found" in result.stderr:
@@ -430,11 +437,36 @@ class WinetricksHandler:
         if winetricks_failed:
             self.logger.error(f"Winetricks failed after {max_attempts} attempts.")
 
-            # Check if protontricks is available for fallback
+            # Network diagnostics before fallback (non-fatal)
+            self.logger.warning("=" * 80)
+            self.logger.warning("NETWORK DIAGNOSTICS: Testing connectivity to component download sources...")
             try:
-                protontricks_check = subprocess.run(['which', 'protontricks'],
-                                                   capture_output=True, text=True, timeout=5)
-                if protontricks_check.returncode == 0:
+                # Check if curl is available
+                curl_check = subprocess.run(['which', 'curl'], capture_output=True, timeout=5)
+                if curl_check.returncode == 0:
+                    # Test Microsoft download servers (used by winetricks for .NET, VC runtimes, DirectX)
+                    test_result = subprocess.run(['curl', '-I', '--max-time', '10', 'https://download.microsoft.com'],
+                                                capture_output=True, text=True, timeout=15)
+                    if test_result.returncode == 0:
+                        self.logger.warning("Can reach download.microsoft.com")
+                    else:
+                        self.logger.error("Cannot reach download.microsoft.com - network/DNS issue likely")
+                        self.logger.error(f"  Curl exit code: {test_result.returncode}")
+                        if test_result.stderr:
+                            self.logger.error(f"  Curl error: {test_result.stderr.strip()}")
+                else:
+                    self.logger.warning("curl not available, skipping network diagnostic test")
+            except Exception as e:
+                self.logger.warning(f"Network diagnostic test skipped: {e}")
+            self.logger.warning("=" * 80)
+
+            # Check if protontricks is available for fallback using centralized handler
+            try:
+                from .protontricks_handler import ProtontricksHandler
+                protontricks_handler = ProtontricksHandler()
+                protontricks_available = protontricks_handler.is_available()
+
+                if protontricks_available:
                     self.logger.warning("=" * 80)
                     self.logger.warning("AUTOMATIC FALLBACK: Winetricks failed, attempting protontricks fallback...")
                     self.logger.warning(f"Last winetricks error: {last_error_details}")
@@ -721,13 +753,6 @@ class WinetricksHandler:
 
             if success:
                 self.logger.info(f"Legacy .NET components {legacy_components} installed successfully with protontricks")
-
-                # Enable dotfiles and symlinks for the prefix
-                if protontricks_handler.enable_dotfiles(appid):
-                    self.logger.info("Enabled dotfiles and symlinks support")
-                else:
-                    self.logger.warning("Failed to enable dotfiles/symlinks (non-critical)")
-
                 return True
             else:
                 self.logger.error(f"Legacy .NET components {legacy_components} installation failed with protontricks")
@@ -844,11 +869,18 @@ class WinetricksHandler:
                 )
 
                 if result.returncode == 0:
-                    self.logger.info(f"Winetricks components installed successfully: {components}")
-                    # Set Windows 10 mode after component installation (matches legacy script timing)
-                    wine_binary = env.get('WINE', '')
-                    self._set_windows_10_mode(env.get('WINEPREFIX', ''), wine_binary)
-                    return True
+                    self.logger.info(f"Winetricks components installation command completed.")
+
+                    # Verify components were actually installed
+                    if self._verify_components_installed(wineprefix, components, env):
+                        self.logger.info("Component verification successful - all components installed correctly.")
+                        # Set Windows 10 mode after component installation (matches legacy script timing)
+                        wine_binary = env.get('WINE', '')
+                        self._set_windows_10_mode(env.get('WINEPREFIX', ''), wine_binary)
+                        return True
+                    else:
+                        self.logger.error(f"Component verification failed (attempt {attempt})")
+                        # Continue to retry
                 else:
                     self.logger.error(f"Winetricks failed (attempt {attempt}): {result.stderr.strip()}")
 
@@ -991,6 +1023,70 @@ class WinetricksHandler:
         except Exception as e:
             self.logger.error(f"Error getting wine binary for prefix: {e}")
             return ""
+
+    def _verify_components_installed(self, wineprefix: str, components: List[str], env: dict) -> bool:
+        """
+        Verify that Wine components were actually installed by checking winetricks.log.
+
+        Args:
+            wineprefix: Wine prefix path
+            components: List of components that should be installed
+            env: Environment variables (includes WINE path)
+
+        Returns:
+            bool: True if all critical components are verified, False otherwise
+        """
+        try:
+            self.logger.info("Verifying installed components...")
+
+            # Check winetricks.log file for installed components
+            winetricks_log = os.path.join(wineprefix, 'winetricks.log')
+
+            if not os.path.exists(winetricks_log):
+                self.logger.error(f"winetricks.log not found at {winetricks_log}")
+                return False
+
+            try:
+                with open(winetricks_log, 'r', encoding='utf-8', errors='ignore') as f:
+                    log_content = f.read().lower()
+            except Exception as e:
+                self.logger.error(f"Failed to read winetricks.log: {e}")
+                return False
+
+            self.logger.debug(f"winetricks.log length: {len(log_content)} bytes")
+
+            # Define critical components that MUST be installed
+            critical_components = ["vcrun2022", "xact"]
+
+            # Check for critical components
+            missing_critical = []
+            for component in critical_components:
+                if component.lower() not in log_content:
+                    missing_critical.append(component)
+
+            if missing_critical:
+                self.logger.error(f"CRITICAL: Missing essential components: {missing_critical}")
+                self.logger.error("Installation reported success but components are NOT in winetricks.log")
+                return False
+
+            # Check for requested components (warn but don't fail)
+            missing_requested = []
+            for component in components:
+                # Handle settings like fontsmooth=rgb (just check the base component name)
+                base_component = component.split('=')[0].lower()
+                if base_component not in log_content and component.lower() not in log_content:
+                    missing_requested.append(component)
+
+            if missing_requested:
+                self.logger.warning(f"Some requested components may not be installed: {missing_requested}")
+                self.logger.warning("This may cause issues, but critical components are present")
+
+            self.logger.info(f"Verification passed - critical components confirmed: {critical_components}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error verifying components: {e}", exc_info=True)
+            return False
 
     def _cleanup_wine_processes(self):
         """

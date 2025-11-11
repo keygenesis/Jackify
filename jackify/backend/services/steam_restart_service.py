@@ -5,6 +5,7 @@ import signal
 import psutil
 import logging
 import sys
+import shutil
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,25 @@ def is_steam_deck() -> bool:
         logger.debug(f"Error detecting Steam Deck: {e}")
     return False
 
+def is_flatpak_steam() -> bool:
+    """Detect if Steam is installed as a Flatpak."""
+    try:
+        # First check if flatpak command exists
+        if not shutil.which('flatpak'):
+            return False
+        
+        # Verify the app is actually installed (not just directory exists)
+        result = subprocess.run(['flatpak', 'list', '--app'],
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL,  # Suppress stderr to avoid error messages
+                              text=True,
+                              timeout=5)
+        if result.returncode == 0 and 'com.valvesoftware.Steam' in result.stdout:
+            return True
+    except Exception as e:
+        logger.debug(f"Error detecting Flatpak Steam: {e}")
+    return False
+
 def get_steam_processes() -> list:
     """Return a list of psutil.Process objects for running Steam processes."""
     steam_procs = []
@@ -122,16 +142,37 @@ def start_steam() -> bool:
     """Attempt to start Steam using the exact methods from existing working logic."""
     env = _get_clean_subprocess_env()
     try:
-        # Try systemd user service (Steam Deck)
+        # Try systemd user service (Steam Deck) - HIGHEST PRIORITY
         if is_steam_deck():
             subprocess.Popen(["systemctl", "--user", "restart", "app-steam@autostart.service"], env=env)
             return True
-        
+
+        # Check if Flatpak Steam (only if not Steam Deck)
+        if is_flatpak_steam():
+            logger.info("Flatpak Steam detected - using flatpak run command")
+            try:
+                # Redirect flatpak's stderr to suppress "app not installed" errors on systems without flatpak Steam
+                # Steam's own stdout/stderr will still go through (flatpak forwards them)
+                subprocess.Popen(["flatpak", "run", "com.valvesoftware.Steam", "-silent"], 
+                               env=env, stderr=subprocess.DEVNULL)
+                time.sleep(5)
+                check_result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
+                if check_result.returncode == 0:
+                    logger.info("Flatpak Steam process detected after start.")
+                    return True
+                else:
+                    logger.warning("Flatpak Steam process not detected after start attempt.")
+                    return False
+            except Exception as e:
+                logger.error(f"Error starting Flatpak Steam: {e}")
+                return False
+
         # Use startup methods with only -silent flag (no -minimized or -no-browser)
+        # Don't redirect stdout/stderr or use start_new_session to allow Steam to connect to display/tray
         start_methods = [
-            {"name": "Popen", "cmd": ["steam", "-silent"], "kwargs": {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL, "start_new_session": True, "env": env}},
-            {"name": "setsid", "cmd": ["setsid", "steam", "-silent"], "kwargs": {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL, "env": env}},
-            {"name": "nohup", "cmd": ["nohup", "steam", "-silent"], "kwargs": {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL, "start_new_session": True, "preexec_fn": os.setpgrp, "env": env}}
+            {"name": "Popen", "cmd": ["steam", "-silent"], "kwargs": {"env": env}},
+            {"name": "setsid", "cmd": ["setsid", "steam", "-silent"], "kwargs": {"env": env}},
+            {"name": "nohup", "cmd": ["nohup", "steam", "-silent"], "kwargs": {"preexec_fn": os.setpgrp, "env": env}}
         ]
         
         for method in start_methods:
@@ -174,17 +215,26 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
             progress_callback(msg)
 
     report("Shutting down Steam...")
-    
-    # Steam Deck: Use systemctl for shutdown (special handling)
+
+    # Steam Deck: Use systemctl for shutdown (special handling) - HIGHEST PRIORITY
     if is_steam_deck():
         try:
             report("Steam Deck detected - using systemctl shutdown...")
-            subprocess.run(['systemctl', '--user', 'stop', 'app-steam@autostart.service'], 
+            subprocess.run(['systemctl', '--user', 'stop', 'app-steam@autostart.service'],
                          timeout=15, check=False, capture_output=True, env=env)
             time.sleep(2)
         except Exception as e:
             logger.debug(f"systemctl stop failed on Steam Deck: {e}")
-    
+    # Flatpak Steam: Use flatpak kill command (only if not Steam Deck)
+    elif is_flatpak_steam():
+        try:
+            report("Flatpak Steam detected - stopping via flatpak...")
+            subprocess.run(['flatpak', 'kill', 'com.valvesoftware.Steam'],
+                         timeout=15, check=False, capture_output=True, stderr=subprocess.DEVNULL, env=env)
+            time.sleep(2)
+        except Exception as e:
+            logger.debug(f"flatpak kill failed: {e}")
+
     # All systems: Use pkill approach (proven 15/16 test success rate)
     try:
         # Skip unreliable steam -shutdown, go straight to pkill

@@ -2904,10 +2904,21 @@ echo Prefix creation complete.
         """Find a Steam game installation path by AppID and common names"""
         import os
         from pathlib import Path
-        
-        # Get Steam libraries from libraryfolders.vdf
-        steam_config_path = Path.home() / ".steam/steam/config/libraryfolders.vdf"
-        if not steam_config_path.exists():
+
+        # Get Steam libraries from libraryfolders.vdf - check multiple possible locations
+        possible_config_paths = [
+            Path.home() / ".steam/steam/config/libraryfolders.vdf",
+            Path.home() / ".local/share/Steam/config/libraryfolders.vdf",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/config/libraryfolders.vdf"  # Flatpak
+        ]
+
+        steam_config_path = None
+        for path in possible_config_paths:
+            if path.exists():
+                steam_config_path = path
+                break
+
+        if not steam_config_path:
             return None
             
         steam_libraries = []

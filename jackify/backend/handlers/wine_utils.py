@@ -200,40 +200,55 @@ class WineUtils:
     @staticmethod
     def _get_sd_card_mounts():
         """
-        Dynamically detect all current SD card mount points
-        Returns list of mount point paths
+        Detect SD card mount points using df.
+        Returns list of actual mount paths from /run/media (e.g., /run/media/deck/MicroSD).
         """
-        try:
-            import subprocess
-            result = subprocess.run(['df', '-h'], capture_output=True, text=True, timeout=5)
-            sd_mounts = []
-            for line in result.stdout.split('\n'):
-                # Look for common SD card mount patterns
-                if '/run/media' in line or ('/mnt' in line and 'sdcard' in line.lower()):
-                    parts = line.split()
-                    if len(parts) >= 6:  # df output has 6+ columns
-                        mount_point = parts[-1]  # Last column is mount point
-                        if mount_point.startswith(('/run/media', '/mnt')):
-                            sd_mounts.append(mount_point)
-            return sd_mounts
-        except Exception:
-            # Fallback to common patterns if df fails
-            return ['/run/media/mmcblk0p1', '/run/media/deck']
+        import subprocess
+        import re
+
+        result = subprocess.run(['df', '-h'], capture_output=True, text=True, timeout=5)
+        sd_mounts = []
+
+        for line in result.stdout.split('\n'):
+            if '/run/media' in line:
+                parts = line.split()
+                if len(parts) >= 6:
+                    mount_point = parts[-1]  # Last column is the mount point
+                    if mount_point.startswith('/run/media/'):
+                        sd_mounts.append(mount_point)
+
+        # Sort by length (longest first) to match most specific paths first
+        sd_mounts.sort(key=len, reverse=True)
+        logger.debug(f"Detected SD card mounts from df: {sd_mounts}")
+        return sd_mounts
 
     @staticmethod
     def _strip_sdcard_path(path):
         """
-        Strip any detected SD card mount prefix from paths
-        Handles both /run/media/mmcblk0p1 and /run/media/deck/UUID patterns
+        Strip SD card mount prefix from path.
+        Handles both /run/media/mmcblk0p1 and /run/media/deck/UUID patterns.
+        Pattern: /run/media/deck/UUID/Games/... becomes /Games/...
+        Pattern: /run/media/mmcblk0p1/Games/... becomes /Games/...
         """
-        sd_mounts = WineUtils._get_sd_card_mounts()
+        import re
 
-        for mount in sd_mounts:
-            if path.startswith(mount):
-                # Strip the mount prefix and ensure proper leading slash
-                relative_path = path[len(mount):].lstrip('/')
-                return "/" + relative_path if relative_path else "/"
+        # Pattern 1: /run/media/deck/UUID/... strip everything up to and including UUID
+        # This matches the bash: "${path#*/run/media/deck/*/*}"
+        deck_pattern = r'^/run/media/deck/[^/]+(/.*)?$'
+        match = re.match(deck_pattern, path)
+        if match:
+            stripped = match.group(1) if match.group(1) else "/"
+            logger.debug(f"Stripped SD card path (deck pattern): {path} -> {stripped}")
+            return stripped
 
+        # Pattern 2: /run/media/mmcblk0p1/... strip /run/media/mmcblk0p1
+        # This matches the bash: "${path#*mmcblk0p1}"
+        if path.startswith('/run/media/mmcblk0p1/'):
+            stripped = path.replace('/run/media/mmcblk0p1', '', 1)
+            logger.debug(f"Stripped SD card path (mmcblk pattern): {path} -> {stripped}")
+            return stripped
+
+        # No SD card pattern matched
         return path
     
     @staticmethod
