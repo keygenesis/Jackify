@@ -6,8 +6,9 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QHBoxLayo
 from PySide6.QtCore import Qt, QSize, QThread, Signal, QTimer, QProcess, QMetaObject, QUrl
 from PySide6.QtGui import QPixmap, QTextCursor, QPainter, QFont
 from ..shared_theme import JACKIFY_COLOR_BLUE, DEBUG_BORDERS
-from ..utils import ansi_to_html, strip_ansi_control_codes
+from ..utils import ansi_to_html, strip_ansi_control_codes, set_responsive_minimum
 from ..widgets.unsupported_game_dialog import UnsupportedGameDialog
+from jackify.frontends.gui.widgets.file_progress_list import FileProgressList
 import os
 import subprocess
 import sys
@@ -121,38 +122,41 @@ class InstallTTWScreen(QWidget):
 
         main_overall_vbox = QVBoxLayout(self)
         main_overall_vbox.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        # Tighter outer margins and reduced inter-section spacing
-        main_overall_vbox.setContentsMargins(20, 12, 20, 0)
-        main_overall_vbox.setSpacing(6)
+        # Match other workflow screens
+        main_overall_vbox.setContentsMargins(50, 50, 50, 0)
+        main_overall_vbox.setSpacing(12)
         if self.debug:
             self.setStyleSheet("border: 2px solid magenta;")
 
         # --- Header (title, description) ---
+        header_widget = QWidget()
         header_layout = QVBoxLayout()
-        header_layout.setSpacing(1)  # Reduce spacing between title and description
-        # Title (no logo)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(2)
+
+        # Title
         title = QLabel("<b>Install Tale of Two Wastelands (TTW)</b>")
-        title.setStyleSheet(f"font-size: 20px; color: {JACKIFY_COLOR_BLUE}; margin: 0px; padding: 0px;")
+        title.setStyleSheet(f"font-size: 20px; color: {JACKIFY_COLOR_BLUE};")
         title.setAlignment(Qt.AlignHCenter)
-        title.setMaximumHeight(30)  # Force compact height
         header_layout.addWidget(title)
-        
-        
-        # Description
+
+        header_layout.addSpacing(10)
+
+        # Description area with fixed height
         desc = QLabel(
-            "This screen allows you to install Tale of Two Wastelands (TTW) using the Hoolamike tool. "
+            "This screen allows you to install Tale of Two Wastelands (TTW) using TTW_Linux_Installer. "
             "Configure your options and start the installation."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #ccc; margin: 0px; padding: 0px; line-height: 1.2;")
+        desc.setStyleSheet("color: #ccc; font-size: 13px;")
         desc.setAlignment(Qt.AlignHCenter)
-        desc.setMaximumHeight(40)  # Force compact height for description
+        desc.setMaximumHeight(50)  # Fixed height for description zone
         header_layout.addWidget(desc)
-        header_widget = QWidget()
+
+        header_layout.addSpacing(12)
+
         header_widget.setLayout(header_layout)
-        # Keep header compact
-        header_widget.setMaximumHeight(90)
-        # Remove height constraint to allow status banner to show
+        header_widget.setFixedHeight(120)  # Fixed total header height to match other screens
         if self.debug:
             header_widget.setStyleSheet("border: 2px solid pink;")
             header_widget.setToolTip("HEADER_SECTION")
@@ -209,24 +213,24 @@ class InstallTTWScreen(QWidget):
         form_grid.addWidget(install_dir_label, 1, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         form_grid.addLayout(install_dir_hbox, 1, 1)
 
-        # --- Hoolamike Status aligned in form grid (row 2) ---
-        hoolamike_label = QLabel("Hoolamike Status:")
-        self.hoolamike_status = QLabel("Checking...")
-        self.hoolamike_btn = QPushButton("Install now")
-        self.hoolamike_btn.setStyleSheet("""
+        # --- TTW_Linux_Installer Status aligned in form grid (row 2) ---
+        ttw_installer_label = QLabel("TTW_Linux_Installer Status:")
+        self.ttw_installer_status = QLabel("Checking...")
+        self.ttw_installer_btn = QPushButton("Install now")
+        self.ttw_installer_btn.setStyleSheet("""
             QPushButton:hover { opacity: 0.95; }
             QPushButton:disabled { opacity: 0.6; }
         """)
-        self.hoolamike_btn.setVisible(False)
-        self.hoolamike_btn.clicked.connect(self.install_hoolamike)
-        hoolamike_hbox = QHBoxLayout()
-        hoolamike_hbox.setContentsMargins(0, 0, 0, 0)
-        hoolamike_hbox.setSpacing(8)
-        hoolamike_hbox.addWidget(self.hoolamike_status)
-        hoolamike_hbox.addWidget(self.hoolamike_btn)
-        hoolamike_hbox.addStretch()
-        form_grid.addWidget(hoolamike_label, 2, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-        form_grid.addLayout(hoolamike_hbox, 2, 1)
+        self.ttw_installer_btn.setVisible(False)
+        self.ttw_installer_btn.clicked.connect(self.install_ttw_installer)
+        ttw_installer_hbox = QHBoxLayout()
+        ttw_installer_hbox.setContentsMargins(0, 0, 0, 0)
+        ttw_installer_hbox.setSpacing(8)
+        ttw_installer_hbox.addWidget(self.ttw_installer_status)
+        ttw_installer_hbox.addWidget(self.ttw_installer_btn)
+        ttw_installer_hbox.addStretch()
+        form_grid.addWidget(ttw_installer_label, 2, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        form_grid.addLayout(ttw_installer_hbox, 2, 1)
 
         # --- Game Requirements aligned in form grid (row 3) ---
         game_req_label = QLabel("Game Requirements:")
@@ -247,7 +251,7 @@ class InstallTTWScreen(QWidget):
         form_group.setLayout(form_grid)
         user_config_vbox.addWidget(form_group)
         
-        # (Hoolamike and Game Requirements now aligned in form_grid above)
+        # (TTW_Linux_Installer and Game Requirements now aligned in form_grid above)
         
         # --- Buttons ---
         btn_row = QHBoxLayout()
@@ -277,6 +281,7 @@ class InstallTTWScreen(QWidget):
         self.show_details_checkbox = QCheckBox("Show details")
         # Start collapsed by default (console hidden until user opts in)
         self.show_details_checkbox.setChecked(False)
+        self.show_details_checkbox.setToolTip("Toggle between activity summary and detailed console output")
         # Use toggled(bool) for reliable signal and map to our handler
         try:
             self.show_details_checkbox.toggled.connect(self._on_show_details_toggled)
@@ -296,40 +301,40 @@ class InstallTTWScreen(QWidget):
         self.btn_row_widget = btn_row_widget
         user_config_widget = QWidget()
         user_config_widget.setLayout(user_config_vbox)
-        user_config_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)  # Allow vertical expansion to fill space
+        user_config_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         if self.debug:
             user_config_widget.setStyleSheet("border: 2px solid orange;")
             user_config_widget.setToolTip("USER_CONFIG_WIDGET")
-        # Right: process monitor (as before)
+
+        # Right: Activity window (FileProgressList widget)
+        # Fixed size policy to prevent shrinking when window expands
+        self.file_progress_list = FileProgressList()
+        self.file_progress_list.setMinimumSize(QSize(300, 20))
+        self.file_progress_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        activity_widget = QWidget()
+        activity_layout = QVBoxLayout()
+        activity_layout.setContentsMargins(0, 0, 0, 0)
+        activity_layout.setSpacing(0)
+        activity_layout.addWidget(self.file_progress_list)
+        activity_widget.setLayout(activity_layout)
+        if self.debug:
+            activity_widget.setStyleSheet("border: 2px solid purple;")
+            activity_widget.setToolTip("ACTIVITY_WINDOW")
+
+        upper_hbox.addWidget(user_config_widget, stretch=11)
+        upper_hbox.addWidget(activity_widget, stretch=9)
+
+        # Keep legacy process monitor hidden (for compatibility with existing code)
         self.process_monitor = QTextEdit()
         self.process_monitor.setReadOnly(True)
-        self.process_monitor.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        self.process_monitor.setMinimumSize(QSize(300, 20))
-        self.process_monitor.setStyleSheet(f"background: #222; color: {JACKIFY_COLOR_BLUE}; font-family: monospace; font-size: 11px; border: 1px solid #444;")
-        self.process_monitor_heading = QLabel("<b>[Process Monitor]</b>")
-        self.process_monitor_heading.setStyleSheet(f"color: {JACKIFY_COLOR_BLUE}; font-size: 13px; margin-bottom: 2px;")
-        self.process_monitor_heading.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        process_vbox = QVBoxLayout()
-        process_vbox.setContentsMargins(0, 0, 0, 0)
-        process_vbox.setSpacing(2)
-        process_vbox.addWidget(self.process_monitor_heading)
-        process_vbox.addWidget(self.process_monitor)
-        process_monitor_widget = QWidget()
-        process_monitor_widget.setLayout(process_vbox)
-        if self.debug:
-            process_monitor_widget.setStyleSheet("border: 2px solid purple;")
-            process_monitor_widget.setToolTip("PROCESS_MONITOR")
-        upper_hbox.addWidget(user_config_widget, stretch=1)
-        upper_hbox.addWidget(process_monitor_widget, stretch=3)
+        self.process_monitor.setVisible(False)
         upper_hbox.setAlignment(Qt.AlignTop)
         self.upper_section_widget = QWidget()
         self.upper_section_widget.setLayout(upper_hbox)
-        # Keep the top section tightly wrapped to its content height
-        try:
-            self.upper_section_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            self.upper_section_widget.setMaximumHeight(self.upper_section_widget.sizeHint().height())
-        except Exception:
-            pass
+        # Use Fixed size policy for consistent height
+        self.upper_section_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.upper_section_widget.setMaximumHeight(280)  # Fixed height to match other workflow screens
         if self.debug:
             self.upper_section_widget.setStyleSheet("border: 2px solid green;")
             self.upper_section_widget.setToolTip("UPPER_SECTION")
@@ -361,6 +366,8 @@ class InstallTTWScreen(QWidget):
         banner_row.addWidget(self.show_details_checkbox)
         banner_row_widget = QWidget()
         banner_row_widget.setLayout(banner_row)
+        banner_row_widget.setMaximumHeight(45)  # Compact height
+        banner_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         main_overall_vbox.addWidget(banner_row_widget)
 
         # Remove spacing - console should expand to fill available space
@@ -411,7 +418,6 @@ class InstallTTWScreen(QWidget):
     def check_requirements(self):
         """Check and display requirements status"""
         from jackify.backend.handlers.path_handler import PathHandler
-        from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
         from jackify.backend.handlers.filesystem_handler import FileSystemHandler
         from jackify.backend.handlers.config_handler import ConfigHandler
         from jackify.backend.models.configuration import SystemInfo
@@ -440,10 +446,10 @@ class InstallTTWScreen(QWidget):
         # Update Start button state after checking requirements
         self._update_start_button_state()
     
-    def _check_hoolamike_status(self):
-        """Check Hoolamike installation status and update UI"""
+    def _check_ttw_installer_status(self):
+        """Check TTW_Linux_Installer installation status and update UI"""
         try:
-            from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+            from jackify.backend.handlers.ttw_installer_handler import TTWInstallerHandler
             from jackify.backend.handlers.filesystem_handler import FileSystemHandler
             from jackify.backend.handlers.config_handler import ConfigHandler
             from jackify.backend.models.configuration import SystemInfo
@@ -452,124 +458,172 @@ class InstallTTWScreen(QWidget):
             filesystem_handler = FileSystemHandler()
             config_handler = ConfigHandler()
             system_info = SystemInfo(is_steamdeck=False)
-            hoolamike_handler = HoolamikeHandler(
+            ttw_installer_handler = TTWInstallerHandler(
                 steamdeck=False,
                 verbose=False,
                 filesystem_handler=filesystem_handler,
                 config_handler=config_handler
             )
             
-            # Check if Hoolamike is installed
-            hoolamike_handler._check_hoolamike_installation()
+            # Check if TTW_Linux_Installer is installed
+            ttw_installer_handler._check_installation()
 
-            if hoolamike_handler.hoolamike_installed:
+            if ttw_installer_handler.ttw_installer_installed:
                 # Check version against latest
-                update_available, installed_v, latest_v = hoolamike_handler.is_hoolamike_update_available()
+                update_available, installed_v, latest_v = ttw_installer_handler.is_ttw_installer_update_available()
                 if update_available:
-                    self.hoolamike_status.setText("Out of date")
-                    self.hoolamike_status.setStyleSheet("color: #f44336;")
-                    self.hoolamike_btn.setText("Update now")
-                    self.hoolamike_btn.setEnabled(True)
-                    self.hoolamike_btn.setVisible(True)
+                    self.ttw_installer_status.setText("Out of date")
+                    self.ttw_installer_status.setStyleSheet("color: #f44336;")
+                    self.ttw_installer_btn.setText("Update now")
+                    self.ttw_installer_btn.setEnabled(True)
+                    self.ttw_installer_btn.setVisible(True)
                 else:
-                    self.hoolamike_status.setText("Ready")
-                    self.hoolamike_status.setStyleSheet("color: #3fd0ea;")
-                    self.hoolamike_btn.setText("Update now")
-                    self.hoolamike_btn.setEnabled(False)  # Greyed out when ready
-                    self.hoolamike_btn.setVisible(True)
+                    self.ttw_installer_status.setText("Ready")
+                    self.ttw_installer_status.setStyleSheet("color: #3fd0ea;")
+                    self.ttw_installer_btn.setText("Update now")
+                    self.ttw_installer_btn.setEnabled(False)  # Greyed out when ready
+                    self.ttw_installer_btn.setVisible(True)
             else:
-                self.hoolamike_status.setText("Not Found")
-                self.hoolamike_status.setStyleSheet("color: #f44336;")
-                self.hoolamike_btn.setText("Install now")
-                self.hoolamike_btn.setEnabled(True)
-                self.hoolamike_btn.setVisible(True)
+                self.ttw_installer_status.setText("Not Found")
+                self.ttw_installer_status.setStyleSheet("color: #f44336;")
+                self.ttw_installer_btn.setText("Install now")
+                self.ttw_installer_btn.setEnabled(True)
+                self.ttw_installer_btn.setVisible(True)
                 
         except Exception as e:
-            self.hoolamike_status.setText("Check Failed")
-            self.hoolamike_status.setStyleSheet("color: #f44336;")
-            self.hoolamike_btn.setText("Install now")
-            self.hoolamike_btn.setEnabled(True)
-            self.hoolamike_btn.setVisible(True)
-            debug_print(f"DEBUG: Hoolamike status check failed: {e}")
+            self.ttw_installer_status.setText("Check Failed")
+            self.ttw_installer_status.setStyleSheet("color: #f44336;")
+            self.ttw_installer_btn.setText("Install now")
+            self.ttw_installer_btn.setEnabled(True)
+            self.ttw_installer_btn.setVisible(True)
+            debug_print(f"DEBUG: TTW_Linux_Installer status check failed: {e}")
 
-    def install_hoolamike(self):
-        """Install or update Hoolamike"""
-        # If not detected, show an appreciation/info dialog about Hoolamike first
+    def install_ttw_installer(self):
+        """Install or update TTW_Linux_Installer"""
+        # If not detected, show info dialog
         try:
-            current_status = self.hoolamike_status.text().strip()
+            current_status = self.ttw_installer_status.text().strip()
         except Exception:
             current_status = ""
         if current_status == "Not Found":
             MessageService.information(
                 self,
-                "Hoolamike Installation",
+                "TTW_Linux_Installer Installation",
                 (
-                    "Hoolamike is a community-made installer that enables the installation of modlists and TTW on Linux.<br><br>"
-                    "Project: <a href=\"https://github.com/Niedzwiedzw/hoolamike\">github.com/Niedzwiedzw/hoolamike</a><br>"
+                    "TTW_Linux_Installer is a native Linux installer for TTW and other MPI packages.<br><br>"
+                    "Project: <a href=\"https://github.com/SulfurNitride/TTW_Linux_Installer\">github.com/SulfurNitride/TTW_Linux_Installer</a><br>"
                     "Please star the repository and thank the developer.<br><br>"
-                    "Jackify will now download and install the latest Linux build of Hoolamike."
+                    "Jackify will now download and install the latest Linux build of TTW_Linux_Installer."
                 ),
                 safety_level="low",
             )
 
         # Update button to show installation in progress
-        self.hoolamike_btn.setText("Installing...")
-        self.hoolamike_btn.setEnabled(False)
+        self.ttw_installer_btn.setText("Installing...")
+        self.ttw_installer_btn.setEnabled(False)
 
-        self.console.append("Installing/updating Hoolamike...")
+        self.console.append("Installing/updating TTW_Linux_Installer...")
 
-        try:
-            from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
-            from jackify.backend.handlers.filesystem_handler import FileSystemHandler
-            from jackify.backend.handlers.config_handler import ConfigHandler
-            from jackify.backend.models.configuration import SystemInfo
+        # Create background thread for installation
+        from PySide6.QtCore import QThread, Signal
 
-            # Create handler instances
-            filesystem_handler = FileSystemHandler()
-            config_handler = ConfigHandler()
-            system_info = SystemInfo(is_steamdeck=False)
-            hoolamike_handler = HoolamikeHandler(
-                steamdeck=False,
-                verbose=False,
-                filesystem_handler=filesystem_handler,
-                config_handler=config_handler
+        class InstallerDownloadThread(QThread):
+            finished = Signal(bool, str)  # success, message
+            progress = Signal(str)  # progress message
+
+            def run(self):
+                try:
+                    from jackify.backend.handlers.ttw_installer_handler import TTWInstallerHandler
+                    from jackify.backend.handlers.filesystem_handler import FileSystemHandler
+                    from jackify.backend.handlers.config_handler import ConfigHandler
+                    from jackify.backend.models.configuration import SystemInfo
+
+                    # Create handler instances
+                    filesystem_handler = FileSystemHandler()
+                    config_handler = ConfigHandler()
+                    system_info = SystemInfo(is_steamdeck=False)
+                    ttw_installer_handler = TTWInstallerHandler(
+                        steamdeck=False,
+                        verbose=False,
+                        filesystem_handler=filesystem_handler,
+                        config_handler=config_handler
+                    )
+
+                    # Install TTW_Linux_Installer (this will download and extract)
+                    self.progress.emit("Downloading TTW_Linux_Installer...")
+                    success, message = ttw_installer_handler.install_ttw_installer()
+
+                    if success:
+                        install_path = ttw_installer_handler.ttw_installer_dir
+                        self.progress.emit(f"Installation complete: {install_path}")
+                    else:
+                        self.progress.emit(f"Installation failed: {message}")
+
+                    self.finished.emit(success, message)
+
+                except Exception as e:
+                    error_msg = f"Error installing TTW_Linux_Installer: {str(e)}"
+                    self.progress.emit(error_msg)
+                    debug_print(f"DEBUG: TTW_Linux_Installer installation error: {e}")
+                    self.finished.emit(False, error_msg)
+
+        # Create and start thread
+        self.installer_download_thread = InstallerDownloadThread()
+        self.installer_download_thread.progress.connect(self._on_installer_download_progress)
+        self.installer_download_thread.finished.connect(self._on_installer_download_finished)
+        self.installer_download_thread.start()
+        
+        # Update Activity window to show download in progress
+        self.file_progress_list.clear()
+        self.file_progress_list.update_or_add_item(
+            item_id="ttw_installer_download",
+            label="Downloading TTW_Linux_Installer...",
+            progress=0
+        )
+
+    def _on_installer_download_progress(self, message):
+        """Handle installer download progress updates"""
+        self.console.append(message)
+        # Update Activity window based on progress message
+        if "Downloading" in message:
+            self.file_progress_list.update_or_add_item(
+                item_id="ttw_installer_download",
+                label="Downloading TTW_Linux_Installer...",
+                progress=0  # Indeterminate progress
+            )
+        elif "Extracting" in message or "extracting" in message.lower():
+            self.file_progress_list.update_or_add_item(
+                item_id="ttw_installer_download",
+                label="Extracting TTW_Linux_Installer...",
+                progress=50
+            )
+        elif "complete" in message.lower() or "successfully" in message.lower():
+            self.file_progress_list.update_or_add_item(
+                item_id="ttw_installer_download",
+                label="TTW_Linux_Installer ready",
+                progress=100
             )
 
-            # Install Hoolamike
-            success, message = hoolamike_handler.install_hoolamike()
-
-            if success:
-                # Extract path from message if available, or show config path
-                install_path = hoolamike_handler.hoolamike_app_install_path
-                self.console.append("Hoolamike installed successfully")
-                self.console.append(f"Installation location: {install_path}")
-                self.console.append("Re-checking Hoolamike status...")
-                # Re-check Hoolamike status after installation
-                self._check_hoolamike_status()
-                self._update_start_button_state()
-
-                # Update button to show successful installation
-                self.hoolamike_btn.setText("Installed")
-                # Keep button disabled - no need to reinstall
-            else:
-                self.console.append(f"Installation failed: {message}")
-                # Re-enable button on failure so user can retry
-                self.hoolamike_btn.setText("Install now")
-                self.hoolamike_btn.setEnabled(True)
-
-        except Exception as e:
-            self.console.append(f"Error installing Hoolamike: {str(e)}")
-            debug_print(f"DEBUG: Hoolamike installation error: {e}")
-            # Re-enable button on exception so user can retry
-            self.hoolamike_btn.setText("Install now")
-            self.hoolamike_btn.setEnabled(True)
+    def _on_installer_download_finished(self, success, message):
+        """Handle installer download completion"""
+        if success:
+            self.console.append("TTW_Linux_Installer installed successfully")
+            # Clear Activity window after successful installation
+            self.file_progress_list.clear()
+            # Re-check status after installation (this will update button state correctly)
+            self._check_ttw_installer_status()
+            self._update_start_button_state()
+        else:
+            self.console.append(f"Installation failed: {message}")
+            # Clear Activity window on failure
+            self.file_progress_list.clear()
+            # Re-enable button on failure so user can retry
+            self.ttw_installer_btn.setText("Install now")
+            self.ttw_installer_btn.setEnabled(True)
     
     def _check_ttw_requirements(self):
         """Check TTW requirements before installation"""
         from jackify.backend.handlers.path_handler import PathHandler
-        from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
-        from jackify.backend.handlers.filesystem_handler import FileSystemHandler
-        from jackify.backend.handlers.config_handler import ConfigHandler
         
         path_handler = PathHandler()
         
@@ -590,13 +644,13 @@ class InstallTTWScreen(QWidget):
             )
             return False
         
-        # Check Hoolamike using the status we already checked
-        status_text = self.hoolamike_status.text()
+        # Check TTW_Linux_Installer using the status we already checked
+        status_text = self.ttw_installer_status.text()
         if status_text in ("Not Found", "Check Failed"):
             MessageService.warning(
                 self,
-                "Hoolamike Required",
-                "Hoolamike is required for TTW installation but is not installed.\n\nPlease install Hoolamike using the 'Install now' button."
+                "TTW_Linux_Installer Required",
+                "TTW_Linux_Installer is required for TTW installation but is not installed.\n\nPlease install TTW_Linux_Installer using the 'Install now' button."
             )
             return False
         
@@ -682,7 +736,7 @@ class InstallTTWScreen(QWidget):
         debug_print(f"Installation directory: {install_dir}")
 
     def _open_url_safe(self, url):
-        """Safely open URL using subprocess to avoid Qt library conflicts in PyInstaller"""
+        """Safely open URL via subprocess to avoid Qt library clashes inside the AppImage runtime"""
         import subprocess
         try:
             subprocess.Popen(['xdg-open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -733,8 +787,10 @@ class InstallTTWScreen(QWidget):
         """Called when the widget becomes visible"""
         super().showEvent(event)
         debug_print(f"DEBUG: TTW showEvent - integration_mode={self._integration_mode}")
-        # Check Hoolamike status only when TTW screen is opened
-        self._check_hoolamike_status()
+        
+        # Check TTW_Linux_Installer status asynchronously (non-blocking) after screen opens
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._check_ttw_installer_status)
 
         # Ensure initial collapsed layout each time this screen is opened
         try:
@@ -770,6 +826,7 @@ class InstallTTWScreen(QWidget):
                 self.show_details_checkbox.blockSignals(True)
                 self.show_details_checkbox.setChecked(False)
                 self.show_details_checkbox.blockSignals(False)
+            
             debug_print("DEBUG: Calling _toggle_console_visibility(Unchecked)")
             self._toggle_console_visibility(_Qt.Unchecked)
             # Force the window to compact height to eliminate bottom whitespace
@@ -783,33 +840,18 @@ class InstallTTWScreen(QWidget):
                 if self._saved_min_size is None:
                     self._saved_min_size = main_window.minimumSize()
                     debug_print(f"DEBUG: Saved min size: {self._saved_min_size}")
-                # Recompute and pin upper section to its content size to avoid slack
-                try:
-                    if hasattr(self, 'upper_section_widget') and self.upper_section_widget is not None:
-                        self.upper_section_widget.setMaximumHeight(self.upper_section_widget.sizeHint().height())
-                except Exception:
-                    pass
-                # Derive compact height from current content (tighter)
-                compact_height = max(440, min(540, self.sizeHint().height() + 20))
-                debug_print(f"DEBUG: Calculated compact_height={compact_height}, sizeHint={self.sizeHint().height()}")
 
-                # COMPLETE RESET: Clear ALL size constraints from previous screen
+                # Fixed compact size - same as menu screens
                 from PySide6.QtCore import QSize
-                main_window.showNormal()
+                # On Steam Deck, keep fullscreen; on other systems, set normal window state
+                if not (hasattr(main_window, 'system_info') and main_window.system_info.is_steamdeck):
+                    main_window.showNormal()
                 # First, completely unlock the window
                 main_window.setMinimumSize(QSize(0, 0))
                 main_window.setMaximumSize(QSize(16777215, 16777215))
-                debug_print("DEBUG: Cleared all size constraints")
-
-                # Now set our compact constraints
-                main_window.setMinimumSize(QSize(1200, compact_height))
-                main_window.setMaximumHeight(compact_height)
-                debug_print(f"DEBUG: Set compact constraints: min=1200x{compact_height}, max_height={compact_height}")
-
-                # Force resize
-                before_size = main_window.size()
-                main_window.resize(1400, compact_height)
-                debug_print(f"DEBUG: Resized from {before_size} to {main_window.size()}")
+                # Only set minimum size - DO NOT RESIZE
+                set_responsive_minimum(main_window, min_width=960, min_height=420)
+                # DO NOT resize - let window stay at current size
                 # Notify parent to ensure compact
                 try:
                     self.resize_request.emit('collapse')
@@ -824,28 +866,17 @@ class InstallTTWScreen(QWidget):
             pass
 
     def hideEvent(self, event):
-        """Called when the widget becomes hidden - ensure window constraints are cleared on Steam Deck"""
+        """Called when the widget becomes hidden - restore window size constraints"""
         super().hideEvent(event)
         try:
-            # Check if we're on Steam Deck
-            is_steamdeck = False
-            if self.system_info and getattr(self.system_info, 'is_steamdeck', False):
-                is_steamdeck = True
-            else:
-                main_window = self.window()
-                if main_window and hasattr(main_window, 'system_info'):
-                    is_steamdeck = getattr(main_window.system_info, 'is_steamdeck', False)
-            
-            # On Steam Deck, clear any size constraints that might have been set
-            # This prevents window size issues affecting other screens after exiting TTW screen
-            if is_steamdeck:
-                debug_print("DEBUG: Steam Deck detected in hideEvent, clearing window constraints")
-                main_window = self.window()
-                if main_window:
-                    from PySide6.QtCore import QSize
-                    # Clear any size constraints that might have been set
-                    main_window.setMaximumSize(QSize(16777215, 16777215))
-                    main_window.setMinimumSize(QSize(0, 0))
+            main_window = self.window()
+            if main_window:
+                from PySide6.QtCore import QSize
+                # Clear any size constraints that might have been set to prevent affecting other screens
+                # This is especially important when the console is expanded
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                main_window.setMinimumSize(QSize(0, 0))
+                debug_print("DEBUG: Install TTW hideEvent - cleared window size constraints")
         except Exception as e:
             debug_print(f"DEBUG: hideEvent exception: {e}")
             pass
@@ -886,17 +917,47 @@ class InstallTTWScreen(QWidget):
 
 
     def browse_wabbajack_file(self):
-        file, _ = QFileDialog.getOpenFileName(self, "Select TTW .mpi File", os.path.expanduser("~"), "MPI Files (*.mpi);;All Files (*)")
-        if file:
-            self.file_edit.setText(file)
+        # Use QFileDialog instance to ensure consistent dialog style
+        start_path = self.file_edit.text() if self.file_edit.text() else os.path.expanduser("~")
+        dialog = QFileDialog(self, "Select TTW .mpi File")
+        dialog.setFileMode(QFileDialog.ExistingFile)
+        dialog.setNameFilter("MPI Files (*.mpi);;All Files (*)")
+        dialog.setDirectory(start_path)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)  # Force Qt dialog for consistency
+        if dialog.exec() == QDialog.Accepted:
+            files = dialog.selectedFiles()
+            if files:
+                self.file_edit.setText(files[0])
 
     def browse_install_dir(self):
-        dir = QFileDialog.getExistingDirectory(self, "Select Install Directory", self.install_dir_edit.text())
-        if dir:
-            self.install_dir_edit.setText(dir)
+        # Use QFileDialog instance to match file browser style exactly
+        dialog = QFileDialog(self, "Select Install Directory")
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)  # Force Qt dialog to match file browser
+        if self.install_dir_edit.text():
+            dialog.setDirectory(self.install_dir_edit.text())
+        if dialog.exec() == QDialog.Accepted:
+            dirs = dialog.selectedFiles()
+            if dirs:
+                self.install_dir_edit.setText(dirs[0])
 
 
     def go_back(self):
+        """Navigate back to main menu and restore window size"""
+        # Restore window size before navigating away
+        try:
+            main_window = self.window()
+            if main_window:
+                from PySide6.QtCore import QSize
+                
+                # Only set minimum size - DO NOT RESIZE
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                set_responsive_minimum(main_window, min_width=960, min_height=420)
+                # DO NOT resize - let window stay at current size
+        except Exception:
+            pass
+        
         if self.stacked_widget:
             self.stacked_widget.setCurrentIndex(self.main_menu_index) 
 
@@ -914,7 +975,7 @@ class InstallTTWScreen(QWidget):
                 if (
                     ("jackify-engine" in line_lower or "7zz" in line_lower or "texconv" in line_lower or
                      "wine" in line_lower or "wine64" in line_lower or "protontricks" in line_lower or
-                     "hoolamike" in line_lower)
+                     "ttw_linux" in line_lower)
                     and "jackify-gui.py" not in line_lower
                 ):
                     cols = line.strip().split(None, 3)
@@ -932,6 +993,9 @@ class InstallTTWScreen(QWidget):
     def _check_protontricks(self):
         """Check if protontricks is available before critical operations"""
         try:
+            if self.protontricks_service.is_bundled_mode():
+                return True
+
             is_installed, installation_type, details = self.protontricks_service.detect_protontricks()
             
             if not is_installed:
@@ -999,11 +1063,52 @@ class InstallTTWScreen(QWidget):
             # Validate install directory
             validation_handler = ValidationHandler()
             from pathlib import Path
-            is_safe, reason = validation_handler.is_safe_install_directory(Path(install_dir))
-            if not is_safe:
-                dlg = WarningDialog(reason, parent=self)
+            install_dir_path = Path(install_dir)
+            
+            # Check for dangerous directories first (system roots, etc.)
+            if validation_handler.is_dangerous_directory(install_dir_path):
+                dlg = WarningDialog(
+                    f"The directory '{install_dir}' is a system or user root and cannot be used for TTW installation.",
+                    parent=self
+                )
                 if not dlg.exec() or not dlg.confirmed:
+                    self._enable_controls_after_operation()
                     return
+            
+            # Check if directory exists and is not empty - TTW_Linux_Installer will overwrite existing files
+            if install_dir_path.exists() and install_dir_path.is_dir():
+                # Check if directory contains any files
+                try:
+                    has_files = any(install_dir_path.iterdir())
+                    if has_files:
+                        # Directory exists and is not empty - warn user about deletion
+                        dlg = WarningDialog(
+                            f"The TTW output directory already exists and contains files:\n{install_dir}\n\n"
+                            f"All files in this directory will be deleted before installation.\n\n"
+                            f"This action cannot be undone.",
+                            parent=self
+                        )
+                        if not dlg.exec() or not dlg.confirmed:
+                            self._enable_controls_after_operation()
+                            return
+                        
+                        # User confirmed - delete all contents of the directory
+                        import shutil
+                        try:
+                            for item in install_dir_path.iterdir():
+                                if item.is_dir():
+                                    shutil.rmtree(item)
+                                else:
+                                    item.unlink()
+                            debug_print(f"DEBUG: Deleted all contents of {install_dir}")
+                        except Exception as e:
+                            MessageService.critical(self, "Error", f"Failed to delete directory contents:\n{e}")
+                            self._enable_controls_after_operation()
+                            return
+                except Exception as e:
+                    debug_print(f"DEBUG: Error checking directory contents: {e}")
+                    # If we can't check, proceed
+            
             if not os.path.isdir(install_dir):
                 create = MessageService.question(self, "Create Directory?",
                     f"The install directory does not exist:\n{install_dir}\n\nWould you like to create it?",
@@ -1014,8 +1119,10 @@ class InstallTTWScreen(QWidget):
                         os.makedirs(install_dir, exist_ok=True)
                     except Exception as e:
                         MessageService.critical(self, "Error", f"Failed to create install directory:\n{e}")
+                        self._enable_controls_after_operation()
                         return
                 else:
+                    self._enable_controls_after_operation()
                     return
             
             # Start TTW installation
@@ -1056,6 +1163,12 @@ class InstallTTWScreen(QWidget):
         self.console.clear()
         self._safe_append_text("Starting TTW installation...")
 
+        # Initialize Activity window with immediate feedback
+        self.file_progress_list.clear()
+        self._update_ttw_phase("Initializing TTW installation", 0, 0, 0)
+        # Force UI update immediately
+        QApplication.processEvents()
+
         # Show status banner and show details checkbox
         self.status_banner.setVisible(True)
         self.status_banner.setText("Initializing TTW installation...")
@@ -1087,17 +1200,19 @@ class InstallTTWScreen(QWidget):
         from PySide6.QtCore import QThread, Signal
         
         class TTWInstallationThread(QThread):
-            output_received = Signal(str)
+            output_batch_received = Signal(list)  # Batched output lines
             progress_received = Signal(str)
             installation_finished = Signal(bool, str)
-            
+
             def __init__(self, mpi_path, install_dir):
                 super().__init__()
                 self.mpi_path = mpi_path
                 self.install_dir = install_dir
                 self.cancelled = False
                 self.proc = None
-            
+                self.output_buffer = []  # Buffer for batching output
+                self.last_emit_time = 0  # Track when we last emitted
+
             def cancel(self):
                 self.cancelled = True
                 try:
@@ -1105,67 +1220,134 @@ class InstallTTWScreen(QWidget):
                         self.proc.terminate()
                 except Exception:
                     pass
+
+            def process_and_buffer_line(self, raw_line):
+                """Process line in worker thread and add to buffer"""
+                # Strip ANSI codes
+                cleaned = strip_ansi_control_codes(raw_line).strip()
+
+                # Strip emojis (do this in worker thread, not UI thread)
+                filtered_chars = []
+                for char in cleaned:
+                    code = ord(char)
+                    is_emoji = (
+                        (0x1F300 <= code <= 0x1F9FF) or
+                        (0x1F600 <= code <= 0x1F64F) or
+                        (0x2600 <= code <= 0x26FF) or
+                        (0x2700 <= code <= 0x27BF)
+                    )
+                    if not is_emoji:
+                        filtered_chars.append(char)
+                cleaned = ''.join(filtered_chars).strip()
+
+                # Only buffer non-empty lines
+                if cleaned:
+                    self.output_buffer.append(cleaned)
+
+            def flush_output_buffer(self):
+                """Emit buffered lines as a batch"""
+                if self.output_buffer:
+                    self.output_batch_received.emit(self.output_buffer[:])
+                    self.output_buffer.clear()
+                    self.last_emit_time = time.time()
             
             def run(self):
                 try:
-                    from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+                    from jackify.backend.handlers.ttw_installer_handler import TTWInstallerHandler
                     from jackify.backend.handlers.filesystem_handler import FileSystemHandler
                     from jackify.backend.handlers.config_handler import ConfigHandler
-                    from jackify.backend.models.configuration import SystemInfo
-                    from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
-                    import subprocess, sys
+                    from pathlib import Path
+                    import tempfile
 
-                    # Prepare backend config (do not run process here)
+                    # Emit startup message
+                    self.process_and_buffer_line("Initializing TTW installation...")
+                    self.flush_output_buffer()
+
+                    # Create backend handler
                     filesystem_handler = FileSystemHandler()
                     config_handler = ConfigHandler()
-                    system_info = SystemInfo(is_steamdeck=False)
-                    hoolamike_handler = HoolamikeHandler(
+                    ttw_handler = TTWInstallerHandler(
                         steamdeck=False,
                         verbose=False,
                         filesystem_handler=filesystem_handler,
                         config_handler=config_handler
                     )
 
-                    # Update config for TTW and save
-                    hoolamike_handler._update_hoolamike_config_for_ttw(
-                        Path(self.mpi_path), Path(self.install_dir)
-                    )
-                    if not hoolamike_handler.save_hoolamike_config():
-                        self.installation_finished.emit(False, "Failed to save hoolamike.yaml")
-                        return
+                    # Create temporary output file
+                    output_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.ttw_output', encoding='utf-8')
+                    output_file_path = Path(output_file.name)
+                    output_file.close()
 
-                    hoolamike_handler._check_hoolamike_installation()
-                    if not hoolamike_handler.hoolamike_executable_path:
-                        self.installation_finished.emit(False, "Hoolamike executable not found. Please install Hoolamike.")
-                        return
+                    # Start installation via backend (non-blocking)
+                    self.process_and_buffer_line("Starting TTW installation...")
+                    self.flush_output_buffer()
 
-                    cmd = [str(hoolamike_handler.hoolamike_executable_path), "tale-of-two-wastelands"]
-                    env = get_clean_subprocess_env()
-
-                    # Use info level to get progress bar updates from indicatif
-                    # Our output filtering will parse the progress indicators
-                    env['RUST_LOG'] = 'info'
-
-                    cwd = str(hoolamike_handler.hoolamike_app_install_path)
-
-                    # Stream output live to GUI
-                    self.proc = subprocess.Popen(
-                        cmd,
-                        cwd=cwd,
-                        env=env,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        bufsize=1,
-                        universal_newlines=True,
+                    self.proc, error_msg = ttw_handler.start_ttw_installation(
+                        Path(self.mpi_path),
+                        Path(self.install_dir),
+                        output_file_path
                     )
 
-                    assert self.proc.stdout is not None
-                    for line in self.proc.stdout:
+                    if not self.proc:
+                        self.installation_finished.emit(False, error_msg or "Failed to start TTW installation")
+                        return
+
+                    self.process_and_buffer_line("TTW_Linux_Installer process started, monitoring output...")
+                    self.flush_output_buffer()
+
+                    # Poll output file with batching for UI responsiveness
+                    last_position = 0
+                    BATCH_INTERVAL = 0.3  # Emit batches every 300ms
+
+                    while self.proc.poll() is None:
                         if self.cancelled:
                             break
-                        self.output_received.emit(line.rstrip())
 
-                    returncode = self.proc.wait()
+                        try:
+                            # Read new content from file
+                            with open(output_file_path, 'r', encoding='utf-8', errors='replace') as f:
+                                f.seek(last_position)
+                                new_lines = f.readlines()
+                                last_position = f.tell()
+
+                                # Process lines in worker thread (heavy work done here, not UI thread)
+                                for line in new_lines:
+                                    if self.cancelled:
+                                        break
+                                    self.process_and_buffer_line(line.rstrip())
+
+                                # Emit batch if enough time has passed
+                                current_time = time.time()
+                                if current_time - self.last_emit_time >= BATCH_INTERVAL:
+                                    self.flush_output_buffer()
+
+                        except Exception:
+                            pass
+
+                        # Sleep longer since we're batching
+                        time.sleep(0.1)
+
+                    # Read any remaining output
+                    try:
+                        with open(output_file_path, 'r', encoding='utf-8', errors='replace') as f:
+                            f.seek(last_position)
+                            remaining_lines = f.readlines()
+                            for line in remaining_lines:
+                                self.process_and_buffer_line(line.rstrip())
+                        self.flush_output_buffer()
+                    except Exception:
+                        pass
+
+                    # Clean up
+                    try:
+                        output_file_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+                    ttw_handler.cleanup_ttw_process(self.proc)
+
+                    # Check result
+                    returncode = self.proc.returncode if self.proc else -1
                     if self.cancelled:
                         self.installation_finished.emit(False, "Installation cancelled by user")
                     elif returncode == 0:
@@ -1174,170 +1356,493 @@ class InstallTTWScreen(QWidget):
                         self.installation_finished.emit(False, f"TTW installation failed with exit code {returncode}")
 
                 except Exception as e:
+                    import traceback
+                    traceback.print_exc()
                     self.installation_finished.emit(False, f"Installation error: {str(e)}")
 
         # Start the installation thread
         self.install_thread = TTWInstallationThread(mpi_path, install_dir)
-        self.install_thread.output_received.connect(self.on_installation_output)
-        self.install_thread.progress_received.connect(self.on_installation_progress)
-        self.install_thread.installation_finished.connect(self.on_installation_finished)
+        # Use QueuedConnection to ensure signals are processed asynchronously and don't block UI
+        self.install_thread.output_batch_received.connect(self.on_installation_output_batch, Qt.QueuedConnection)
+        self.install_thread.progress_received.connect(self.on_installation_progress, Qt.QueuedConnection)
+        self.install_thread.installation_finished.connect(self.on_installation_finished, Qt.QueuedConnection)
+
+        # Start thread and immediately process events to show initial UI state
         self.install_thread.start()
+        QApplication.processEvents()  # Process any pending events to update UI immediately
+
+    def on_installation_output_batch(self, messages):
+        """Handle batched output from TTW_Linux_Installer (already processed in worker thread)"""
+        # Lines are already cleaned (ANSI codes stripped, emojis removed) in worker thread
+        # CRITICAL: Accumulate all console updates and do ONE widget update per batch
+
+        if not hasattr(self, '_ttw_seen_lines'):
+            self._ttw_seen_lines = set()
+            self._ttw_current_phase = None
+            self._ttw_last_progress = 0
+            self._ttw_last_activity_update = 0
+            self.ttw_start_time = time.time()
+
+        # Accumulate lines to display (do ONE console update at end)
+        lines_to_display = []
+        html_fragments = []
+        show_details_due_to_error = False
+        latest_progress = None  # Track latest progress to update activity ONCE per batch
+
+        for cleaned in messages:
+            if not cleaned:
+                continue
+
+            lower_cleaned = cleaned.lower()
+
+            # Extract progress (but don't update UI yet - wait until end of batch)
+            try:
+                progress_match = re.search(r'\[(\d+)/(\d+)\]', cleaned)
+                if progress_match:
+                    current = int(progress_match.group(1))
+                    total = int(progress_match.group(2))
+                    percent = int((current / total) * 100) if total > 0 else 0
+                    latest_progress = (current, total, percent)
+
+                if 'loading manifest:' in lower_cleaned:
+                    manifest_match = re.search(r'loading manifest:\s*(\d+)/(\d+)', lower_cleaned)
+                    if manifest_match:
+                        current = int(manifest_match.group(1))
+                        total = int(manifest_match.group(2))
+                        self._ttw_current_phase = "Loading manifest"
+            except Exception:
+                pass
+
+            # Determine if we should show this line
+            is_error = 'error:' in lower_cleaned and 'succeeded' not in lower_cleaned and '0 failed' not in lower_cleaned
+            is_warning = 'warning:' in lower_cleaned
+            is_milestone = any(kw in lower_cleaned for kw in ['===', 'complete', 'finished', 'validation', 'configuration valid'])
+            is_file_op = any(ext in lower_cleaned for ext in ['.ogg', '.mp3', '.bsa', '.dds', '.nif', '.kf', '.hkx'])
+
+            should_show = (is_error or is_warning or is_milestone) or (self.show_details_checkbox.isChecked() and not is_file_op)
+
+            if should_show:
+                if is_error or is_warning:
+                    color = '#f44336' if is_error else '#ff9800'
+                    prefix = "WARNING: " if is_warning else "ERROR: "
+                    escaped = (prefix + cleaned).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    html_fragments.append(f'<span style="color: {color};">{escaped}</span>')
+                    show_details_due_to_error = True
+                else:
+                    lines_to_display.append(cleaned)
+
+        # Update activity widget ONCE per batch (if progress changed significantly)
+        if latest_progress:
+            current, total, percent = latest_progress
+            current_time = time.time()
+            percent_changed = abs(percent - self._ttw_last_progress) >= 1
+            time_passed = (current_time - self._ttw_last_activity_update) >= 0.5  # 500ms throttle
+
+            if percent_changed or time_passed:
+                self._update_ttw_activity(current, total, percent)
+                self._ttw_last_progress = percent
+                self._ttw_last_activity_update = current_time
+
+        # Now do ONE console update for entire batch
+        if html_fragments or lines_to_display:
+            try:
+                # Update console with all accumulated output in one operation
+                if html_fragments:
+                    combined_html = '<br>'.join(html_fragments)
+                    self.console.insertHtml(combined_html + '<br>')
+
+                if lines_to_display:
+                    combined_text = '\n'.join(lines_to_display)
+                    self.console.append(combined_text)
+
+                if show_details_due_to_error and not self.show_details_checkbox.isChecked():
+                    self.show_details_checkbox.setChecked(True)
+            except Exception:
+                pass
 
     def on_installation_output(self, message):
-        """Handle regular output from installation thread with smart progress parsing"""
+        """Handle regular output from TTW_Linux_Installer with comprehensive filtering and smart parsing"""
+        # Initialize tracking structures
+        if not hasattr(self, '_ttw_seen_lines'):
+            self._ttw_seen_lines = set()
+            self._ttw_last_extraction_progress = 0
+            self._ttw_last_file_operation_time = 0
+            self._ttw_file_operation_count = 0
+            self._ttw_current_phase = None
+            self._ttw_last_progress_line = None
+            self._ttw_progress_line_text = None
+        
         # Filter out internal status messages from user console
         if message.strip().startswith('[Jackify]'):
             # Log internal messages to file but don't show in console
             self._write_to_log_file(message)
             return
 
-        # Strip ANSI terminal control codes (cursor movement, line clearing, etc.)
+        # Strip ANSI terminal control codes
         cleaned = strip_ansi_control_codes(message).strip()
 
-        # Filter out empty lines after stripping control codes
+        # Strip emojis from output (TTW_Linux_Installer includes emojis)
+        # Common emojis: ✅ ❌ ⚠️ 🔍 💾 📁 🚀 🛑
+        # Use character-by-character filtering to avoid regex recursion issues
+        # This is safer than regex for emoji removal
+        filtered_chars = []
+        for char in cleaned:
+            code = ord(char)
+            # Check if character is in emoji ranges - skip emojis
+            is_emoji = (
+                (0x1F300 <= code <= 0x1F9FF) or  # Miscellaneous Symbols and Pictographs
+                (0x1F600 <= code <= 0x1F64F) or  # Emoticons
+                (0x2600 <= code <= 0x26FF) or    # Miscellaneous Symbols
+                (0x2700 <= code <= 0x27BF)       # Dingbats
+            )
+            if not is_emoji:
+                filtered_chars.append(char)
+        cleaned = ''.join(filtered_chars).strip()
+
+        # Filter out empty lines
         if not cleaned:
             return
 
-        # If user asked to see details, show the raw cleaned line first (INFO-level verbosity)
-        try:
-            if self.show_details_checkbox.isChecked():
-                self._safe_append_text(cleaned)
-        except Exception:
-            pass
-
-        import re
-
-        # Try to extract total asset count from the completion message
-        success_match = re.search(r'succesfully installed \[(\d+)\] assets', cleaned)
-        if success_match:
-            total = int(success_match.group(1))
-            if not hasattr(self, 'ttw_asset_count'):
-                self.ttw_asset_count = 0
-
-            # Cache this total for future installs in config
-            from jackify.backend.handlers.config_handler import ConfigHandler
-            config_handler = ConfigHandler()
-            config_handler.set('ttw_asset_count_cache', total)
-
-            self._safe_append_text(f"\nInstallation complete: {total} assets processed successfully!")
-            return
-
-        # Parse progress bar lines: "▕bar▏(123/456 ETA 10m ELAPSED 5m) handling_assets"
-        progress_match = re.search(r'\((\d+)/(\d+)\s+ETA\s+([^\)]+)\)\s*(.*)', cleaned)
-        if progress_match:
-            current = int(progress_match.group(1))
-            total = int(progress_match.group(2))
-
-            # Store total for later use
-            if not hasattr(self, 'ttw_total_assets'):
-                self.ttw_total_assets = total
-
-            task = progress_match.group(4).strip() or "Processing"
-            percent = int((current / total) * 100) if total > 0 else 0
-            elapsed = int(time.time() - self.ttw_start_time) if hasattr(self, 'ttw_start_time') else 0
-            elapsed_min = elapsed // 60
-            elapsed_sec = elapsed % 60
-
-            self.status_banner.setText(
-                f"{task}: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
-            )
-
-            # Show progress updates every 100 assets in console (keep it minimal)
-            if current % 100 == 0:
-                self._safe_append_text(f"Progress: {current}/{total} assets ({percent}%)")
-            return
+        # Initialize start time if not set
+        if not hasattr(self, 'ttw_start_time'):
+            self.ttw_start_time = time.time()
 
         lower_cleaned = cleaned.lower()
 
-        # Detect phases and extract useful information
-        if 'extracting_manifest' in cleaned:
-            self._safe_append_text("Extracting TTW manifest from .mpi file...")
-            return
+        # === MINIMAL PROCESSING: Match standalone behavior as closely as possible ===
+        # When running standalone: output goes directly to terminal, no processing
+        # Here: We must process each line, but do it as efficiently as possible
+        
+        # Always log to file (simple, no recursion risk)
+        try:
+            self._write_to_log_file(cleaned)
+        except Exception:
+            pass
+        
+        # Extract progress for Activity window (minimal regex, wrapped in try/except)
+        try:
+            # Try [X/Y] pattern
+            progress_match = re.search(r'\[(\d+)/(\d+)\]', cleaned)
+            if progress_match:
+                current = int(progress_match.group(1))
+                total = int(progress_match.group(2))
+                percent = int((current / total) * 100) if total > 0 else 0
+                phase = self._ttw_current_phase or "Processing"
+                self._update_ttw_activity(current, total, percent)
+            
+            # Try "Loading manifest: X/Y"
+            if 'loading manifest:' in lower_cleaned:
+                manifest_match = re.search(r'loading manifest:\s*(\d+)/(\d+)', lower_cleaned)
+                if manifest_match:
+                    current = int(manifest_match.group(1))
+                    total = int(manifest_match.group(2))
+                    percent = int((current / total) * 100) if total > 0 else 0
+                    self._ttw_current_phase = "Loading manifest"
+                    self._update_ttw_activity(current, total, percent)
+        except Exception:
+            pass  # Skip if regex fails
+        
+        # Determine if we should show this line
+        # By default: only show errors, warnings, milestones
+        # Everything else: only in details mode
+        is_error = 'error:' in lower_cleaned and 'succeeded' not in lower_cleaned and '0 failed' not in lower_cleaned
+        is_warning = 'warning:' in lower_cleaned
+        is_milestone = any(kw in lower_cleaned for kw in ['===', 'complete', 'finished', 'validation', 'configuration valid'])
+        is_file_op = any(ext in lower_cleaned for ext in ['.ogg', '.mp3', '.bsa', '.dds', '.nif', '.kf', '.hkx'])
+        
+        should_show = (is_error or is_warning or is_milestone) or (self.show_details_checkbox.isChecked() and not is_file_op)
+        
+        if should_show:
+            # Direct console append - no recursion, no complex processing
+            try:
+                if is_error or is_warning:
+                    # Color code errors/warnings
+                    color = '#f44336' if is_error else '#ff9800'
+                    prefix = "WARNING: " if is_warning else "ERROR: "
+                    escaped = (prefix + cleaned).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    html = f'<span style="color: {color};">{escaped}</span><br>'
+                    self.console.insertHtml(html)
+                    if not self.show_details_checkbox.isChecked():
+                        self.show_details_checkbox.setChecked(True)
+                else:
+                    self.console.append(cleaned)
+            except Exception:
+                pass  # Don't break on console errors
+        
+        return
+        # Simplified: Only extract progress, don't filter file operations (show in details mode)
+        # Extract progress from lines like: [44908/58889] or [X/Y]
+        progress_match = None
+        try:
+            progress_match = re.search(r'\[(\d+)/(\d+)\]', cleaned)
+        except (RecursionError, re.error):
+            pass
+        
+        if progress_match:
+            current = int(progress_match.group(1))
+            total = int(progress_match.group(2))
+            percent = int((current / total) * 100) if total > 0 else 0
+            
+            # Check if this looks like a file operation line (has file extension)
+            is_file_operation = any(ext in lower_cleaned for ext in ['.ogg', '.mp3', '.bsa', '.dds', '.nif', '.kf', '.hkx'])
+            
+            if is_file_operation:
+                # File operation - only show in details mode, but still extract progress for Activity window
+                self._ttw_file_operation_count += 1
+                phase_name = self._ttw_current_phase or "Processing files"
+                
+                # Update Activity Window with phase and counters
+                self._update_ttw_activity(current, total, percent)
+                
+                # Only show in details mode
+                if self.show_details_checkbox.isChecked():
+                    elapsed = int(time.time() - self.ttw_start_time)
+                    elapsed_min = elapsed // 60
+                    elapsed_sec = elapsed % 60
+                    progress_text = f"{phase_name}: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+                    self._update_progress_line(progress_text)
+                return
 
-        if 'handling_assets_for_location' in cleaned:
-            # Parse location being processed
-            location_match = re.search(r'location=([^}]+)', cleaned)
-            if location_match:
-                location = location_match.group(1).strip()
-                self._safe_append_text(f"Processing location: {location}")
-            return
-
-        if 'building_archive' in cleaned:
-            self._safe_append_text("Building BSA archives...")
-            return
-
-        # Filter out variable resolution spam (MAGICALLY messages)
-        if 'magically' in lower_cleaned or 'variable_name=' in cleaned or 'resolve_variable' in cleaned:
-            # Extract total from manifest if present
-            if 'got manifest file' in lower_cleaned:
-                self._safe_append_text("Loading TTW manifest...")
-            return
-
-        # Use known asset count for TTW 3.4
-        # Actual count: 215,396 assets (measured from complete installation of TTW 3.4)
-        # This will need updating if TTW releases a new version
-        if 'got manifest file' in lower_cleaned and not hasattr(self, 'ttw_total_assets'):
-            self.ttw_total_assets = 215396
-            self._safe_append_text(f"Loading TTW manifest ({self.ttw_total_assets:,} assets)...")
-            return
-
-        # Filter out ALL per-asset processing messages
-        if 'handling_asset{kind=' in cleaned:
-            # Track progress by counting these messages
-            if not hasattr(self, 'ttw_asset_count'):
-                self.ttw_asset_count = 0
-            self.ttw_asset_count += 1
-
-            # Update banner every 10 assets processed
-            if self.ttw_asset_count % 10 == 0:
-                elapsed = int(time.time() - self.ttw_start_time) if hasattr(self, 'ttw_start_time') else 0
+        # === COLLAPSE REPETITIVE EXTRACTION PROGRESS ===
+        # Pattern: "Extracted 100/27290 files..." - simplified with error handling
+        extraction_progress_match = None
+        try:
+            extraction_progress_match = re.search(r'Extracted\s+(\d+)/(\d+)\s+files', cleaned, re.IGNORECASE)
+        except (RecursionError, re.error):
+            pass
+        
+        if extraction_progress_match:
+            current = int(extraction_progress_match.group(1))
+            total = int(extraction_progress_match.group(2))
+            percent = int((current / total) * 100) if total > 0 else 0
+            
+            # Update phase with counters (always update Activity window)
+            phase_name = "Extracting MPI package"
+            self._ttw_current_phase = phase_name
+            self._update_ttw_phase(phase_name, current, total, percent)
+            
+            # Only show progress line in details mode
+            if self.show_details_checkbox.isChecked():
+                elapsed = int(time.time() - self.ttw_start_time)
                 elapsed_min = elapsed // 60
                 elapsed_sec = elapsed % 60
-
-                # Show with total if we have it
-                if hasattr(self, 'ttw_total_assets'):
-                    percent = int((self.ttw_asset_count / self.ttw_total_assets) * 100)
-                    self.status_banner.setText(
-                        f"Processing assets... {self.ttw_asset_count}/{self.ttw_total_assets} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
-                    )
-                else:
-                    self.status_banner.setText(
-                        f"Processing assets... ({self.ttw_asset_count} completed) | Elapsed: {elapsed_min}m {elapsed_sec}s"
-                    )
-
-            return  # Don't show per-asset messages in console
-
-        # Filter out per-file verbose messages
-        if 'wrote [' in cleaned and 'bytes]' in cleaned:
+                progress_text = f"{phase_name}: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+                self._update_progress_line(progress_text)
+            
+            # Update last progress tracking
+            self._ttw_last_extraction_progress = current
             return
 
-        if '[ok]' in lower_cleaned:
-            return  # Skip all [OK] messages
-
-        # Filter out version/metadata spam at start
-        if any(x in lower_cleaned for x in ['install:installing_ttw', 'title=', 'version=', 'author=', 'description=']):
-            if 'installing_ttw{' in cleaned:
-                # Extract just the version/title cleanly
-                version_match = re.search(r'version=([\d.]+)\s+title=([^}]+)', cleaned)
-                if version_match:
-                    self._safe_append_text(f"Installing {version_match.group(2)} v{version_match.group(1)}")
+        # === IMPORTANT MILESTONES AND SUMMARIES ===
+        # Simplified: Use simple string checks instead of regex
+        milestone_keywords = ['===', 'complete', 'finished', 'installation summary', 'assets processed',
+                             'validation complete', 'bsa creation', 'post-commands', 'operation summary',
+                             'package:', 'variables:', 'locations:', 'assets:', 'loaded', 'successfully parsed']
+        is_milestone = any(keyword in lower_cleaned for keyword in milestone_keywords)
+        
+        if is_milestone:
+            self._safe_append_text(cleaned)
             return
 
-        # Keep important messages: errors, warnings, completions
-        important_keywords = [
-            'error', 'warning', 'failed', 'patch applied'
-        ]
+        # === PROGRESS PATTERNS ===
+        # Pattern 1: "Progress: 50% (1234/5678)" - simplified regex with error handling
+        progress_pct_match = None
+        try:
+            progress_pct_match = re.search(r'(\d+)%\s*\((\d+)/(\d+)\)', cleaned)
+        except (RecursionError, re.error):
+            pass
+        
+        if progress_pct_match:
+            percent = int(progress_pct_match.group(1))
+            current = int(progress_pct_match.group(2))
+            total = int(progress_pct_match.group(3))
+            
+            if not hasattr(self, 'ttw_total_assets'):
+                self.ttw_total_assets = total
+            
+            elapsed = int(time.time() - self.ttw_start_time)
+            elapsed_min = elapsed // 60
+            elapsed_sec = elapsed % 60
+            
+            self.status_banner.setText(
+                f"Installing TTW: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+            )
+            
+            # Update Activity Window with phase and counters
+            phase_name = self._ttw_current_phase or "Processing"
+            self._update_ttw_activity(current, total, percent)
+            
+            # Only show progress line in details mode
+            if self.show_details_checkbox.isChecked():
+                progress_text = f"{phase_name}: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+                self._update_progress_line(progress_text)
+            return
 
-        # Show only important messages
-        if any(kw in lower_cleaned for kw in important_keywords):
-            # Strip out emojis if present
-            cleaned_no_emoji = re.sub(r'[⭐☢️🩹]', '', cleaned)
-            self._safe_append_text(cleaned_no_emoji.strip())
+        # Pattern 2: "[X/Y]" with context OR "Loading manifest: X/Y" pattern - simplified with error handling
+        progress_match = None
+        loading_manifest_match = None
+        try:
+            progress_match = re.search(r'\[(\d+)/(\d+)\]', cleaned)
+            loading_manifest_match = re.search(r'loading manifest:\s*(\d+)/(\d+)', lower_cleaned)
+        except (RecursionError, re.error):
+            pass
+        
+        if loading_manifest_match:
+            # Special handling for "Loading manifest: X/Y" - always show this progress
+            current = int(loading_manifest_match.group(1))
+            total = int(loading_manifest_match.group(2))
+            percent = int((current / total) * 100) if total > 0 else 0
+            
+            # Extract elapsed time if present - simplified with error handling
+            elapsed_match = None
+            try:
+                elapsed_match = re.search(r'elapsed:\s*(\d+)m\s*(\d+)s', lower_cleaned)
+            except (RecursionError, re.error):
+                pass
+            
+            if elapsed_match:
+                elapsed_min = int(elapsed_match.group(1))
+                elapsed_sec = int(elapsed_match.group(2))
+            else:
+                elapsed = int(time.time() - self.ttw_start_time)
+                elapsed_min = elapsed // 60
+                elapsed_sec = elapsed % 60
+            
+            phase_name = "Loading manifest"
+            self._ttw_current_phase = phase_name
+            
+            # Remove duplicate percentage - status banner already shows it
+            self.status_banner.setText(
+                f"Loading manifest: {current:,}/{total:,} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+            )
+            
+            # Update single progress line (but show periodic updates to indicate activity)
+            progress_text = f"{phase_name}: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+            
+            # Show periodic updates (every 2% or every 5 seconds) to indicate process is alive
+            # More frequent updates to prevent appearance of hanging
+            if not hasattr(self, '_ttw_last_manifest_percent'):
+                self._ttw_last_manifest_percent = 0
+                self._ttw_last_manifest_time = time.time()
+            
+            percent_diff = percent - self._ttw_last_manifest_percent
+            time_diff = time.time() - self._ttw_last_manifest_time
+            
+            # Update progress line, but also show new line if significant progress or time elapsed
+            # More frequent updates (every 2% or 5 seconds) to show activity
+            if percent_diff >= 2 or time_diff >= 5:
+                # Significant progress or time elapsed - show as new line to indicate activity
+                self._safe_append_text(progress_text)
+                self._ttw_progress_line_text = progress_text
+                self._ttw_last_manifest_percent = percent
+                self._ttw_last_manifest_time = time.time()
+            else:
+                # Small progress - just update the line
+                self._update_progress_line(progress_text)
+            
+            # Update Activity Window with phase and counters
+            self._update_ttw_activity(current, total, percent)
+            
+            # Process events to keep UI responsive during long operations
+            QApplication.processEvents()
+            return
+        
+        if progress_match:
+            current = int(progress_match.group(1))
+            total = int(progress_match.group(2))
+            
+            # Check if this is a meaningful progress line (not a file operation we already handled)
+            if any(keyword in lower_cleaned for keyword in ['writing', 'creating', 'processing', 'installing', 'extracting', 'loading']):
+                if not hasattr(self, 'ttw_total_assets'):
+                    self.ttw_total_assets = total
+                
+                # Detect specific phases from context (simple string checks)
+                phase_name = self._ttw_current_phase
+                if 'bsa' in lower_cleaned or 'writing' in lower_cleaned:
+                    phase_name = "Writing BSA archives"
+                    self._ttw_current_phase = phase_name
+                elif 'loading' in lower_cleaned:
+                    phase_name = "Loading manifest"
+                    self._ttw_current_phase = phase_name
+                elif not phase_name:
+                    phase_name = "Processing"
+                
+                percent = int((current / total) * 100) if total > 0 else 0
+                elapsed = int(time.time() - self.ttw_start_time)
+                elapsed_min = elapsed // 60
+                elapsed_sec = elapsed % 60
+                
+                self.status_banner.setText(
+                    f"Installing TTW: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+                )
+                
+                # Update Activity Window with phase and counters (always)
+                self._update_ttw_activity(current, total, percent)
+                
+                # Only show progress line in details mode
+                if self.show_details_checkbox.isChecked():
+                    progress_text = f"{phase_name}: {current}/{total} ({percent}%) | Elapsed: {elapsed_min}m {elapsed_sec}s"
+                    self._update_progress_line(progress_text)
+            return
 
-            # Auto-expand console on errors/warnings
-            if any(kw in lower_cleaned for kw in ['error', 'warning', 'failed']):
-                if not self.show_details_checkbox.isChecked():
-                    self.show_details_checkbox.setChecked(True)
+        # === PHASE DETECTION ===
+        phase_keywords = {
+            'extracting': 'Extracting MPI package',
+            'downloading': 'Downloading files',
+            'loading manifest': 'Loading manifest',
+            'parsing assets': 'Parsing assets',
+            'validation': 'Running validation',
+            'installing': 'Installing TTW',
+            'writing bsa': 'Writing BSA archives',
+            'post-installation': 'Running post-installation commands',
+            'cleaning up': 'Cleaning up'
+        }
+        
+        for keyword, phase_name in phase_keywords.items():
+            if keyword in lower_cleaned:
+                if self._ttw_current_phase != phase_name:
+                    # Start new phase - just update Activity window and show phase message
+                    self._ttw_current_phase = phase_name
+                    self._update_ttw_phase(phase_name)  # Start phase without counters initially
+                    if self.show_details_checkbox.isChecked():
+                        self._safe_append_text(f"{phase_name}...")
+                    self._ttw_progress_line_text = None  # Reset progress line
+                return
+
+        # === CONFIGURATION AND VALIDATION MESSAGES ===
+        # Simplified: Use simple string checks
+        config_keywords = ['fallout 3:', 'fallout nv:', 'output:', 'mpi package:', 'configuration valid',
+                          'validating configuration', 'verifying', 'file correctly absent', 'disk space check']
+        is_config = any(keyword in lower_cleaned for keyword in config_keywords)
+        
+        if is_config:
+            self._safe_append_text(cleaned)
+            return
+
+        # === EXECUTION COMMANDS (filter most, show important ones) ===
+        if 'executing:' in lower_cleaned or 'cmd.exe' in lower_cleaned:
+            # Only show rename operations and failures, not every delete/rename
+            if 'renamed:' in lower_cleaned or 'ren:' in lower_cleaned:
+                if self.show_details_checkbox.isChecked():
+                    self._safe_append_text(cleaned)
+            return
+
+        # === PATCH/LZ4 DECOMPRESSION MESSAGES ===
+        # Show these to indicate activity during manifest loading
+        if 'patch' in lower_cleaned and ('lz4' in lower_cleaned or 'decompressing' in lower_cleaned):
+            # Show patch decompression messages (but not errors - those are handled above)
+            if 'error' not in lower_cleaned and 'failed' not in lower_cleaned:
+                # Just a status message - show it briefly or in details mode
+                if self.show_details_checkbox.isChecked():
+                    self._safe_append_text(cleaned)
+                # Don't return - let it fall through to default handling
+            else:
+                # Error message - already handled by error detection above
+                return
+
+        # === DEFAULT: Only show in details mode ===
+        if self.show_details_checkbox.isChecked():
+            self._safe_append_text(cleaned)
     
     def on_installation_progress(self, progress_message):
         """Replace the last line in the console for progress updates"""
@@ -1347,6 +1852,16 @@ class InstallTTWScreen(QWidget):
         cursor.removeSelectedText()
         cursor.insertText(progress_message)
         # Don't force scroll for progress updates - let user control
+    
+    def _update_progress_line(self, text):
+        """Update progress - just append, don't try to replace (simpler and safer)"""
+        # Simplified: Just append progress lines instead of trying to replace
+        # This avoids Qt cursor manipulation issues that cause SystemError
+        # Only show in details mode to avoid spam
+        if self.show_details_checkbox.isChecked():
+            self._safe_append_text(text)
+        # Always track for Activity window updates (handled separately)
+        self._ttw_progress_line_text = text
     
     def _update_ttw_elapsed_time(self):
         """Update status banner with elapsed time"""
@@ -1517,7 +2032,9 @@ class InstallTTWScreen(QWidget):
                 return
 
             # Restore main window to normal size (clear any compact constraints)
-            main_window.showNormal()
+            # On Steam Deck, keep fullscreen; on other systems, set normal window state
+            if not (hasattr(main_window, 'system_info') and main_window.system_info.is_steamdeck):
+                main_window.showNormal()
             main_window.setMaximumHeight(16777215)
             main_window.setMinimumHeight(0)
             # Restore original minimum size so the window can expand normally
@@ -1567,38 +2084,77 @@ class InstallTTWScreen(QWidget):
                 debug_print("DEBUG: Steam Deck detected, skipping window resize in collapse branch")
                 return
 
-            # Shrink main window to a compact height so no extra space remains
-            # Use the screen's sizeHint to choose a minimal-but-safe height (tighter)
-            size_hint = self.sizeHint().height()
-            new_min_height = max(440, min(540, size_hint + 20))
-            main_window.showNormal()
-            # Temporarily clamp max to enforce the smaller collapsed size; parent clears on expand
-            main_window.setMaximumHeight(new_min_height)
-            main_window.setMinimumHeight(new_min_height)
-            # Lower the main window minimum size vertically so it can collapse
+            # Use fixed compact height for consistency across all workflow screens
+            compact_height = 620
+            # On Steam Deck, keep fullscreen; on other systems, set normal window state
+            if not (hasattr(main_window, 'system_info') and main_window.system_info.is_steamdeck):
+                main_window.showNormal()
+            # Set minimum height but no maximum to allow user resizing
             try:
                 from PySide6.QtCore import QSize
-                current_min = self._saved_min_size or main_window.minimumSize()
-                main_window.setMinimumSize(QSize(current_min.width(), new_min_height))
+                set_responsive_minimum(main_window, min_width=960, min_height=compact_height)
+                main_window.setMaximumSize(QSize(16777215, 16777215))  # No maximum
             except Exception:
                 pass
 
             # Resize to compact height to avoid leftover space
             current_size = main_window.size()
-            main_window.resize(current_size.width(), new_min_height)
-            try:
-                self.main_overall_vbox.invalidate()
-                self.updateGeometry()
-            except Exception:
-                pass
+            main_window.resize(current_size.width(), compact_height)
             # Notify parent to collapse
             try:
                 self.resize_request.emit('collapse')
             except Exception:
                 pass
 
-    def _safe_append_text(self, text):
-        """Append text with professional auto-scroll behavior"""
+    def _update_ttw_activity(self, current, total, percent):
+        """Update Activity window with TTW installation progress"""
+        try:
+            # Determine current phase based on progress
+            if not hasattr(self, '_ttw_current_phase'):
+                self._ttw_current_phase = None
+
+            # Use current phase name or default
+            phase_name = self._ttw_current_phase or "Processing"
+            
+            # Update or add activity item showing current progress with phase name and counters
+            # Don't include percentage in label - progress bar shows it
+            label = f"{phase_name}: {current:,}/{total:,}"
+            self.file_progress_list.update_or_add_item(
+                item_id="ttw_progress",
+                label=label,
+                progress=percent
+            )
+        except Exception:
+            pass
+
+    def _update_ttw_phase(self, phase_name, current=None, total=None, percent=0):
+        """Update Activity window with current TTW installation phase and optional progress"""
+        try:
+            self._ttw_current_phase = phase_name
+            
+            # Build label with phase name and counters if provided
+            # Don't include percentage in label - progress bar shows it
+            if current is not None and total is not None:
+                label = f"{phase_name}: {current:,}/{total:,}"
+            else:
+                label = phase_name
+            
+            # Update or add activity item
+            self.file_progress_list.update_or_add_item(
+                item_id="ttw_phase",
+                label=label,
+                progress=percent
+            )
+        except Exception:
+            pass
+
+    def _safe_append_text(self, text, color=None):
+        """Append text with professional auto-scroll behavior
+        
+        Args:
+            text: Text to append
+            color: Optional HTML color code (e.g., '#f44336' for red) to format the text
+        """
         # Write all messages to log file (including internal messages)
         self._write_to_log_file(text)
         
@@ -1611,8 +2167,19 @@ class InstallTTWScreen(QWidget):
         # Check if user was at bottom BEFORE adding text
         was_at_bottom = (scrollbar.value() >= scrollbar.maximum() - 1)  # Allow 1px tolerance
         
-        # Add the text
-        self.console.append(text)
+        # Format text with color if provided
+        if color:
+            # Escape HTML special characters
+            escaped_text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            formatted_text = f'<span style="color: {color};">{escaped_text}</span>'
+            # Use insertHtml for colored text (QTextEdit supports HTML in append when using RichText)
+            cursor = self.console.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            self.console.setTextCursor(cursor)
+            self.console.insertHtml(formatted_text + '<br>')
+        else:
+            # Add plain text
+            self.console.append(text)
         
         # Auto-scroll if user was at bottom and hasn't manually scrolled
         # Re-check bottom state after text addition for better reliability
@@ -2624,10 +3191,10 @@ class InstallTTWScreen(QWidget):
 
                 def run(self):
                     try:
-                        from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+                        from jackify.backend.handlers.ttw_installer_handler import TTWInstallerHandler
 
                         self.progress.emit("Integrating TTW into modlist...")
-                        success = HoolamikeHandler.integrate_ttw_into_modlist(
+                        success = TTWInstallerHandler.integrate_ttw_into_modlist(
                             ttw_output_path=self.ttw_output_path,
                             modlist_install_dir=self.modlist_install_dir,
                             ttw_version=self.ttw_version
@@ -2655,6 +3222,25 @@ class InstallTTWScreen(QWidget):
                     }}
                 """)
 
+            # Create progress dialog for integration
+            progress_dialog = QProgressDialog(
+                f"Integrating TTW {ttw_version} into modlist...\n\n"
+                "This involves copying several GB of files and may take a few minutes.\n"
+                "Please wait...",
+                None,  # No cancel button
+                0, 0,  # Indeterminate progress
+                self
+            )
+            progress_dialog.setWindowTitle("Integrating TTW")
+            progress_dialog.setMinimumDuration(0)  # Show immediately
+            progress_dialog.setWindowModality(Qt.ApplicationModal)
+            progress_dialog.setCancelButton(None)
+            progress_dialog.show()
+            QApplication.processEvents()
+
+            # Store reference to close later
+            self._integration_progress_dialog = progress_dialog
+
             # Create and start integration thread
             self.integration_thread = IntegrationThread(
                 ttw_output_dir,
@@ -2666,6 +3252,11 @@ class InstallTTWScreen(QWidget):
             self.integration_thread.start()
 
         except Exception as e:
+            # Close progress dialog if it exists
+            if hasattr(self, '_integration_progress_dialog'):
+                self._integration_progress_dialog.close()
+                delattr(self, '_integration_progress_dialog')
+
             error_msg = f"Integration error: {str(e)}"
             self._safe_append_text(f"\nError: {error_msg}")
             debug_print(f"ERROR: {error_msg}")
@@ -2676,6 +3267,11 @@ class InstallTTWScreen(QWidget):
     def _on_integration_thread_finished(self, success: bool, ttw_version: str):
         """Handle completion of integration thread"""
         try:
+            # Close progress dialog
+            if hasattr(self, '_integration_progress_dialog'):
+                self._integration_progress_dialog.close()
+                delattr(self, '_integration_progress_dialog')
+
             if success:
                 self._safe_append_text("\nTTW integration completed successfully!")
 
@@ -2731,8 +3327,8 @@ class InstallTTWScreen(QWidget):
         """
         try:
             from pathlib import Path
-            import shutil
             import re
+            from PySide6.QtCore import QThread, Signal
 
             output_dir = Path(self.install_dir_edit.text())
             if not output_dir.exists():
@@ -2745,39 +3341,78 @@ class InstallTTWScreen(QWidget):
             mpi_path = self.file_edit.text().strip()
             version_suffix = ""
             if mpi_path:
-                mpi_filename = Path(mpi_path).stem  # Get filename without extension
-                # Look for version pattern like "3.4", "v3.4", etc.
+                mpi_filename = Path(mpi_path).stem
                 version_match = re.search(r'v?(\d+\.\d+(?:\.\d+)?)', mpi_filename, re.IGNORECASE)
                 if version_match:
                     version_suffix = f" {version_match.group(1)}"
 
-            # Create archive filename - [NoDelete] prefix is used by MO2 workflows
+            # Create archive filename
             archive_name = f"[NoDelete] Tale of Two Wastelands{version_suffix}"
-
-            # Place archive in parent directory of output
             archive_path = output_dir.parent / archive_name
 
-            if not automated:
-                self._safe_append_text(f"\nCreating mod archive: {archive_name}.zip")
-                self._safe_append_text("This may take several minutes...")
+            # Create background thread for zip creation
+            class ZipCreationThread(QThread):
+                finished = Signal(bool, str)  # success, result_message
 
-            # Create the zip archive
-            # shutil.make_archive returns the path without .zip extension
-            final_archive = shutil.make_archive(
-                str(archive_path),  # base name (without extension)
-                'zip',              # format
-                str(output_dir)     # directory to archive
+                def __init__(self, output_dir, archive_path):
+                    super().__init__()
+                    self.output_dir = output_dir
+                    self.archive_path = archive_path
+
+                def run(self):
+                    try:
+                        import shutil
+                        final_archive = shutil.make_archive(
+                            str(self.archive_path),
+                            'zip',
+                            str(self.output_dir)
+                        )
+                        self.finished.emit(True, str(final_archive))
+                    except Exception as e:
+                        self.finished.emit(False, str(e))
+
+            # Create progress dialog (non-modal so UI stays responsive)
+            progress_dialog = QProgressDialog(
+                f"Creating mod archive: {archive_name}.zip\n\n"
+                "This may take several minutes depending on installation size...",
+                "Cancel",
+                0, 0,  # 0,0 = indeterminate progress bar
+                self
             )
+            progress_dialog.setWindowTitle("Creating Archive")
+            progress_dialog.setMinimumDuration(0)  # Show immediately
+            progress_dialog.setWindowModality(Qt.ApplicationModal)
+            progress_dialog.setCancelButton(None)  # Cannot cancel zip operation safely
+            progress_dialog.show()
+            QApplication.processEvents()
 
-            if not automated:
-                self._safe_append_text(f"\nArchive created successfully: {Path(final_archive).name}")
-                MessageService.information(
-                    self, "Archive Created",
-                    f"TTW mod archive created successfully!\n\n"
-                    f"Location: {final_archive}\n\n"
-                    f"You can now install this archive as a mod in MO2.",
-                    safety_level="medium"
-                )
+            # Create and start thread
+            zip_thread = ZipCreationThread(output_dir, archive_path)
+
+            def on_zip_finished(success, result):
+                progress_dialog.close()
+                if success:
+                    final_archive = result
+                    if not automated:
+                        self._safe_append_text(f"\nArchive created successfully: {Path(final_archive).name}")
+                        MessageService.information(
+                            self, "Archive Created",
+                            f"TTW mod archive created successfully!\n\n"
+                            f"Location: {final_archive}\n\n"
+                            f"You can now install this archive as a mod in MO2.",
+                            safety_level="medium"
+                        )
+                else:
+                    error_msg = f"Failed to create mod archive: {result}"
+                    if not automated:
+                        self._safe_append_text(f"\nError: {error_msg}")
+                        MessageService.critical(self, "Archive Creation Failed", error_msg)
+
+            zip_thread.finished.connect(on_zip_finished)
+            zip_thread.start()
+
+            # Keep reference to prevent garbage collection
+            self._zip_thread = zip_thread
 
             return True
 
@@ -2874,32 +3509,14 @@ https://wiki.scenicroute.games/Somnium/1_Installation.html</i>"""
         self.cleanup_processes()
         # Restore main window to standard Jackify size before leaving
         try:
-            from PySide6.QtCore import Qt as _Qt
             main_window = self.window()
-            
-            # Check if we're on Steam Deck - if so, skip all window size modifications
-            is_steamdeck = False
-            if self.system_info and getattr(self.system_info, 'is_steamdeck', False):
-                is_steamdeck = True
-            elif not self.system_info and main_window and hasattr(main_window, 'system_info'):
-                is_steamdeck = getattr(main_window.system_info, 'is_steamdeck', False)
-            
-            if main_window and not is_steamdeck:
-                # Desktop: Restore main window to standard Jackify size
-                main_window.setMaximumHeight(16777215)
-                main_window.setMinimumHeight(900)
-                # Prefer a sane default height; keep current width
-                current_width = max(1200, main_window.size().width())
-                main_window.resize(current_width, 900)
-            elif is_steamdeck:
-                # Steam Deck: Only clear any constraints that might exist, don't set new ones
-                # This prevents window size issues when navigating away
-                debug_print("DEBUG: Steam Deck detected in cancel_and_cleanup, skipping window resize")
-                if main_window:
-                    # Clear any size constraints that might have been set
-                    from PySide6.QtCore import QSize
-                    main_window.setMaximumSize(QSize(16777215, 16777215))
-                    main_window.setMinimumSize(QSize(0, 0))
+            if main_window:
+                from PySide6.QtCore import QSize
+                
+                # Only set minimum size - DO NOT RESIZE
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                set_responsive_minimum(main_window, min_width=960, min_height=420)
+                # DO NOT resize - let window stay at current size
             
             # Ensure we exit in collapsed state so next entry starts compact (both Desktop and Deck)
             if self.show_details_checkbox.isChecked():

@@ -34,35 +34,133 @@ class ProtontricksHandler:
         self.steamdeck = steamdeck # Store steamdeck status
         self._native_steam_service = None
         self.use_native_operations = True  # Enable native Steam operations by default
+
+    def _get_steam_dir_from_libraryfolders(self) -> Optional[Path]:
+        """
+        Determine the Steam installation directory from libraryfolders.vdf location.
+        This is the source of truth - we read libraryfolders.vdf to find where Steam is actually installed.
+        
+        Returns:
+            Path to Steam installation directory (the one with config/, steamapps/, etc.) or None
+        """
+        from ..handlers.path_handler import PathHandler
+        
+        # Check all possible libraryfolders.vdf locations
+        vdf_paths = [
+            Path.home() / ".steam/steam/config/libraryfolders.vdf",
+            Path.home() / ".local/share/Steam/config/libraryfolders.vdf",
+            Path.home() / ".steam/root/config/libraryfolders.vdf",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/config/libraryfolders.vdf",  # Flatpak
+            Path.home() / ".var/app/com.valvesoftware.Steam/data/Steam/config/libraryfolders.vdf",  # Flatpak alternative
+        ]
+        
+        for vdf_path in vdf_paths:
+            if vdf_path.is_file():
+                # The Steam installation directory is the parent of the config directory
+                steam_dir = vdf_path.parent.parent
+                # Verify it has steamapps directory (required by protontricks)
+                if (steam_dir / "steamapps").exists():
+                    logger.debug(f"Determined STEAM_DIR from libraryfolders.vdf: {steam_dir}")
+                    return steam_dir
+        
+        # Fallback: try to get from library paths
+        library_paths = PathHandler.get_all_steam_library_paths()
+        if library_paths:
+            # For Flatpak Steam, library path is .local/share/Steam, but Steam installation might be data/Steam
+            first_lib = library_paths[0]
+            if '.var/app/com.valvesoftware.Steam' in str(first_lib):
+                # Check if data/Steam exists (main Flatpak Steam installation)
+                data_steam = Path.home() / ".var/app/com.valvesoftware.Steam/data/Steam"
+                if (data_steam / "steamapps").exists():
+                    logger.debug(f"Determined STEAM_DIR from Flatpak data path: {data_steam}")
+                    return data_steam
+                # Otherwise use the library path itself
+                if (first_lib / "steamapps").exists():
+                    logger.debug(f"Determined STEAM_DIR from Flatpak library path: {first_lib}")
+                    return first_lib
+            else:
+                # Native Steam - library path should be the Steam installation
+                if (first_lib / "steamapps").exists():
+                    logger.debug(f"Determined STEAM_DIR from native library path: {first_lib}")
+                    return first_lib
+        
+        logger.warning("Could not determine STEAM_DIR from libraryfolders.vdf")
+        return None
     
+    def _get_bundled_winetricks_path(self) -> Optional[Path]:
+        """
+        Get the path to the bundled winetricks script following AppImage best practices.
+        Same logic as WinetricksHandler._get_bundled_winetricks_path()
+        """
+        possible_paths = []
+
+        # AppImage environment - use APPDIR (standard AppImage best practice)
+        if os.environ.get('APPDIR'):
+            appdir_path = Path(os.environ['APPDIR']) / 'opt' / 'jackify' / 'tools' / 'winetricks'
+            possible_paths.append(appdir_path)
+
+        # Development environment - relative to module location
+        module_dir = Path(__file__).parent.parent.parent  # Go from handlers/ up to jackify/
+        dev_path = module_dir / 'tools' / 'winetricks'
+        possible_paths.append(dev_path)
+
+        # Try each path until we find one that works
+        for path in possible_paths:
+            if path.exists() and os.access(path, os.X_OK):
+                logger.debug(f"Found bundled winetricks at: {path}")
+                return path
+
+        logger.warning(f"Bundled winetricks not found. Tried paths: {possible_paths}")
+        return None
+    
+    def _get_bundled_cabextract_path(self) -> Optional[Path]:
+        """
+        Get the path to the bundled cabextract binary following AppImage best practices.
+        Same logic as WinetricksHandler._get_bundled_cabextract()
+        """
+        possible_paths = []
+
+        # AppImage environment - use APPDIR (standard AppImage best practice)
+        if os.environ.get('APPDIR'):
+            appdir_path = Path(os.environ['APPDIR']) / 'opt' / 'jackify' / 'tools' / 'cabextract'
+            possible_paths.append(appdir_path)
+
+        # Development environment - relative to module location
+        module_dir = Path(__file__).parent.parent.parent  # Go from handlers/ up to jackify/
+        dev_path = module_dir / 'tools' / 'cabextract'
+        possible_paths.append(dev_path)
+
+        # Try each path until we find one that works
+        for path in possible_paths:
+            if path.exists() and os.access(path, os.X_OK):
+                logger.debug(f"Found bundled cabextract at: {path}")
+                return path
+
+        logger.warning(f"Bundled cabextract not found. Tried paths: {possible_paths}")
+        return None
+
     def _get_clean_subprocess_env(self):
         """
-        Create a clean environment for subprocess calls by removing PyInstaller-specific
+        Create a clean environment for subprocess calls by removing bundle-specific
         environment variables that can interfere with external program execution.
         
+        Uses the centralized get_clean_subprocess_env() to ensure AppImage variables
+        are removed to prevent subprocess spawning issues.
+
         Returns:
             dict: Cleaned environment dictionary
         """
-        env = os.environ.copy()
-        
-        # Remove PyInstaller-specific environment variables
-        env.pop('_MEIPASS', None)
-        env.pop('_MEIPASS2', None)
-        
-        # Clean library path variables that PyInstaller modifies (Linux/Unix)
+        # Use centralized function that removes AppImage variables
+        from .subprocess_utils import get_clean_subprocess_env
+        env = get_clean_subprocess_env()
+
+        # Clean library path variables that frozen bundles modify (Linux/Unix)
         if 'LD_LIBRARY_PATH_ORIG' in env:
-            # Restore original LD_LIBRARY_PATH if it was backed up by PyInstaller
+            # Restore original LD_LIBRARY_PATH if it was backed up by the bundler
             env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
         else:
-            # Remove PyInstaller-modified LD_LIBRARY_PATH
+            # Remove bundle-modified LD_LIBRARY_PATH
             env.pop('LD_LIBRARY_PATH', None)
-        
-        # Clean PATH of PyInstaller-specific entries
-        if 'PATH' in env and hasattr(sys, '_MEIPASS'):
-            path_entries = env['PATH'].split(os.pathsep)
-            # Remove any PATH entries that point to PyInstaller temp directory
-            cleaned_path = [p for p in path_entries if not p.startswith(sys._MEIPASS)]
-            env['PATH'] = os.pathsep.join(cleaned_path)
         
         # Clean macOS library path (if present)
         if 'DYLD_LIBRARY_PATH' in env and hasattr(sys, '_MEIPASS'):
@@ -84,17 +182,17 @@ class ProtontricksHandler:
 
     def detect_protontricks(self):
         """
-        Detect if protontricks is installed and whether it's flatpak or native.
-        If not found, prompts the user to install the Flatpak version.
+        Detect if protontricks is installed (silent detection for GUI/automated use).
 
-        Returns True if protontricks is found or successfully installed, False otherwise
+        Returns True if protontricks is found, False otherwise.
+        Does NOT prompt user or attempt installation - that's handled by the GUI.
         """
         logger.debug("Detecting if protontricks is installed...")
-        
+
         # Check if protontricks exists as a command
         protontricks_path_which = shutil.which("protontricks")
-        self.flatpak_path = shutil.which("flatpak")  # Store for later use
-        
+        self.flatpak_path = shutil.which("flatpak")
+
         if protontricks_path_which:
             # Check if it's a flatpak wrapper
             try:
@@ -103,7 +201,6 @@ class ProtontricksHandler:
                     if "flatpak run" in content:
                         logger.debug(f"Detected Protontricks is a Flatpak wrapper at {protontricks_path_which}")
                         self.which_protontricks = 'flatpak'
-                        # Continue to check flatpak list just to be sure
                     else:
                         logger.info(f"Native Protontricks found at {protontricks_path_which}")
                         self.which_protontricks = 'native'
@@ -111,103 +208,27 @@ class ProtontricksHandler:
                         return True
             except Exception as e:
                 logger.error(f"Error reading protontricks executable: {e}")
-        
-        # Check if flatpak protontricks is installed (or if wrapper check indicated flatpak)
-        flatpak_installed = False
-        try:
-            # PyInstaller fix: Comprehensive environment cleaning for subprocess calls
-            env = self._get_clean_subprocess_env()
 
+        # Check if flatpak protontricks is installed
+        try:
+            env = self._get_clean_subprocess_env()
             result = subprocess.run(
                 ["flatpak", "list"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,  # Suppress stderr to avoid error messages when flatpak not installed
+                capture_output=True,
                 text=True,
-                env=env  # Use comprehensively cleaned environment
+                env=env
             )
             if result.returncode == 0 and "com.github.Matoking.protontricks" in result.stdout:
                 logger.info("Flatpak Protontricks is installed")
                 self.which_protontricks = 'flatpak'
-                flatpak_installed = True
                 return True
         except FileNotFoundError:
-             logger.warning("'flatpak' command not found. Cannot check for Flatpak Protontricks.")
+            logger.warning("'flatpak' command not found. Cannot check for Flatpak Protontricks.")
         except Exception as e:
             logger.error(f"Unexpected error checking flatpak: {e}")
 
-        # If neither native nor flatpak found, prompt for installation
-        if not self.which_protontricks:
-            logger.warning("Protontricks not found (native or flatpak).")
-            
-            should_install = False
-            if self.steamdeck:
-                logger.info("Running on Steam Deck, attempting automatic Flatpak installation.")
-                # Maybe add a brief pause or message?
-                print("Protontricks not found. Attempting automatic installation via Flatpak...")
-                should_install = True
-            else:
-                try:
-                    print("\nProtontricks not found. Choose installation method:")
-                    print("1. Install via Flatpak (automatic)")
-                    print("2. Install via native package manager (manual)")
-                    print("3. Skip (Use bundled winetricks instead)")
-                    choice = input("Enter choice (1/2/3): ").strip()
-
-                    if choice == '1' or choice == '':
-                        should_install = True
-                    elif choice == '2':
-                        print("\nTo install protontricks via your system package manager:")
-                        print("• Ubuntu/Debian: sudo apt install protontricks")
-                        print("• Fedora: sudo dnf install protontricks")
-                        print("• Arch Linux: sudo pacman -S protontricks")
-                        print("• openSUSE: sudo zypper install protontricks")
-                        print("\nAfter installation, please rerun Jackify.")
-                        return False
-                    elif choice == '3':
-                        print("Skipping protontricks installation. Will use bundled winetricks for component installation.")
-                        logger.info("User chose to skip protontricks and use winetricks fallback")
-                        return False
-                    else:
-                        print("Invalid choice. Installation cancelled.")
-                        return False
-                except KeyboardInterrupt:
-                     print("\nInstallation cancelled.")
-                     return False
-            
-            if should_install:
-                try:
-                    logger.info("Attempting to install Flatpak Protontricks...")
-                    # Use --noninteractive for automatic install where applicable
-                    install_cmd = ["flatpak", "install", "-u", "-y", "--noninteractive", "flathub", "com.github.Matoking.protontricks"]
-                    
-                    # PyInstaller fix: Comprehensive environment cleaning for subprocess calls
-                    env = self._get_clean_subprocess_env()
-                    
-                    # Run with output visible to user
-                    process = subprocess.run(install_cmd, check=True, text=True, env=env)
-                    logger.info("Flatpak Protontricks installation successful.")
-                    print("Flatpak Protontricks installed successfully.")
-                    self.which_protontricks = 'flatpak'
-                    return True
-                except FileNotFoundError:
-                    logger.error("'flatpak' command not found. Cannot install.")
-                    print("Error: 'flatpak' command not found. Please install Flatpak first.")
-                    return False
-                except subprocess.CalledProcessError as e:
-                    logger.error(f"Flatpak installation failed: {e}")
-                    print(f"Error: Flatpak installation failed (Command: {' '.join(e.cmd)}). Please try installing manually.")
-                    return False
-                except Exception as e:
-                    logger.error(f"Unexpected error during Flatpak installation: {e}")
-                    print("An unexpected error occurred during installation.")
-                    return False
-            else:
-                logger.error("User chose not to install Protontricks or installation skipped.")
-                print("Protontricks installation skipped. Cannot continue without Protontricks.")
-                return False
-                
-        # Should not reach here if logic is correct, but acts as a fallback
-        logger.error("Protontricks detection failed unexpectedly.")
+        # Not found
+        logger.warning("Protontricks not found (native or flatpak).")
         return False
     
     def check_protontricks_version(self):
@@ -257,13 +278,30 @@ class ProtontricksHandler:
                 logger.error("Could not detect protontricks installation")
                 return None
 
-        if self.which_protontricks == 'flatpak':
+        # Build command based on detected protontricks type
+        if self.which_protontricks == 'bundled':
+            # CRITICAL: Use safe Python executable to prevent AppImage recursive spawning
+            from .subprocess_utils import get_safe_python_executable
+            python_exe = get_safe_python_executable()
+            
+            # Use bundled wrapper script for reliable invocation
+            # The wrapper script imports cli and calls it with sys.argv
+            wrapper_script = self._get_bundled_protontricks_wrapper_path()
+            if wrapper_script and Path(wrapper_script).exists():
+                cmd = [python_exe, str(wrapper_script)]
+                cmd.extend([str(a) for a in args])
+            else:
+                # Fallback: use python -m to run protontricks CLI directly
+                # This avoids importing protontricks.__init__ which imports gui.py which needs Pillow
+                cmd = [python_exe, "-m", "protontricks.cli.main"]
+                cmd.extend([str(a) for a in args])
+        elif self.which_protontricks == 'flatpak':
             cmd = ["flatpak", "run", "com.github.Matoking.protontricks"]
-        else:
+            cmd.extend(args)
+        else:  # native
             cmd = ["protontricks"]
-        
-        cmd.extend(args)
-        
+            cmd.extend(args)
+
         # Default to capturing stdout/stderr unless specified otherwise in kwargs
         run_kwargs = {
             'stdout': subprocess.PIPE,
@@ -271,18 +309,73 @@ class ProtontricksHandler:
             'text': True,
             **kwargs # Allow overriding defaults (like stderr=DEVNULL)
         }
-        # PyInstaller fix: Use cleaned environment for all protontricks calls
-        env = self._get_clean_subprocess_env()
+        
+        # Handle environment: if env was passed in kwargs, merge it with our clean env
+        # Otherwise create a clean env from scratch
+        if 'env' in kwargs and kwargs['env']:
+            # Merge passed env with our clean env (our values take precedence)
+            env = self._get_clean_subprocess_env()
+            env.update(kwargs['env'])  # Merge passed env, but our clean env is base
+            # Re-apply our critical settings after merge to ensure they're set
+        else:
+            # Bundled-runtime fix: Use cleaned environment for all protontricks calls
+            env = self._get_clean_subprocess_env()
+        
         # Suppress Wine debug output
         env['WINEDEBUG'] = '-all'
+        
+        # CRITICAL: Set STEAM_DIR based on libraryfolders.vdf to prevent user prompts
+        steam_dir = self._get_steam_dir_from_libraryfolders()
+        if steam_dir:
+            env['STEAM_DIR'] = str(steam_dir)
+            logger.debug(f"Set STEAM_DIR for protontricks: {steam_dir}")
+        else:
+            logger.warning("Could not determine STEAM_DIR from libraryfolders.vdf - protontricks may prompt user")
+
+        # CRITICAL: Only set bundled winetricks for NATIVE protontricks
+        # Flatpak protontricks runs in a sandbox and CANNOT access AppImage FUSE mounts (/tmp/.mount_*)
+        # Flatpak protontricks has its own winetricks bundled inside the flatpak
+        if self.which_protontricks == 'native':
+            winetricks_path = self._get_bundled_winetricks_path()
+            if winetricks_path:
+                env['WINETRICKS'] = str(winetricks_path)
+                logger.debug(f"Set WINETRICKS for native protontricks: {winetricks_path}")
+            else:
+                logger.warning("Bundled winetricks not found - native protontricks will use system winetricks")
+
+            cabextract_path = self._get_bundled_cabextract_path()
+            if cabextract_path:
+                cabextract_dir = str(cabextract_path.parent)
+                current_path = env.get('PATH', '')
+                env['PATH'] = f"{cabextract_dir}{os.pathsep}{current_path}" if current_path else cabextract_dir
+                logger.debug(f"Added bundled cabextract to PATH for native protontricks: {cabextract_dir}")
+            else:
+                logger.warning("Bundled cabextract not found - native protontricks will use system cabextract")
+        else:
+            # Flatpak protontricks - DO NOT set bundled paths
+            logger.debug(f"Using {self.which_protontricks} protontricks - it has its own winetricks (cannot access AppImage mounts)")
+        
+        # CRITICAL: Suppress winetricks verbose output when not in debug mode
+        # WINETRICKS_SUPER_QUIET suppresses "Executing..." messages from winetricks
+        from ..handlers.config_handler import ConfigHandler
+        config_handler = ConfigHandler()
+        debug_mode = config_handler.get('debug_mode', False)
+        if not debug_mode:
+            env['WINETRICKS_SUPER_QUIET'] = '1'
+            logger.debug("Set WINETRICKS_SUPER_QUIET=1 to suppress winetricks verbose output")
+        else:
+            logger.debug("Debug mode enabled - winetricks verbose output will be shown")
+        
+        # Note: No need to modify LD_LIBRARY_PATH for Wine/Proton as it's a system dependency
+        # Wine/Proton finds its own libraries through the system's library search paths
+
         run_kwargs['env'] = env
         try:
             return subprocess.run(cmd, **run_kwargs)
         except Exception as e:
             logger.error(f"Error running protontricks: {e}")
-            # Consider returning a mock CompletedProcess with an error code?
             return None
-    
+
     def set_protontricks_permissions(self, modlist_dir, steamdeck=False):
         """
         Set permissions for Steam operations to access the modlist directory.
@@ -304,7 +397,7 @@ class ProtontricksHandler:
         
         logger.info("Setting Protontricks permissions...")
         try:
-            # PyInstaller fix: Use cleaned environment
+            # Bundled-runtime fix: Use cleaned environment
             env = self._get_clean_subprocess_env()
             
             subprocess.run(["flatpak", "override", "--user", "com.github.Matoking.protontricks", 
@@ -414,7 +507,7 @@ class ProtontricksHandler:
                 logger.error("Protontricks path not determined, cannot list shortcuts.")
                 return {}
             self.logger.debug(f"Running command: {' '.join(cmd)}")
-            # PyInstaller fix: Use cleaned environment
+            # Bundled-runtime fix: Use cleaned environment
             env = self._get_clean_subprocess_env()
             result = subprocess.run(cmd, capture_output=True, text=True, check=True, encoding='utf-8', errors='ignore', env=env)
             # Regex to capture name and AppID
@@ -566,7 +659,7 @@ class ProtontricksHandler:
         Returns True on success, False on failure
         """
         try:
-            # PyInstaller fix: Use cleaned environment
+            # Bundled-runtime fix: Use cleaned environment
             env = self._get_clean_subprocess_env()
             env["WINEDEBUG"] = "-all"
             
@@ -652,16 +745,22 @@ class ProtontricksHandler:
     
     def run_protontricks_launch(self, appid, installer_path, *extra_args):
         """
-        Run protontricks-launch (for WebView or similar installers) using the correct method for flatpak or native.
+        Run protontricks-launch (for WebView or similar installers) using the correct method for bundled, flatpak, or native.
         Returns subprocess.CompletedProcess object.
         """
         if self.which_protontricks is None:
             if not self.detect_protontricks():
                 self.logger.error("Could not detect protontricks installation")
                 return None
-        if self.which_protontricks == 'flatpak':
+        if self.which_protontricks == 'bundled':
+            # CRITICAL: Use safe Python executable to prevent AppImage recursive spawning
+            from .subprocess_utils import get_safe_python_executable
+            python_exe = get_safe_python_executable()
+            # Use bundled Python module
+            cmd = [python_exe, "-m", "protontricks.cli.launch", "--appid", appid, str(installer_path)]
+        elif self.which_protontricks == 'flatpak':
             cmd = ["flatpak", "run", "--command=protontricks-launch", "com.github.Matoking.protontricks", "--appid", appid, str(installer_path)]
-        else:
+        else:  # native
             launch_path = shutil.which("protontricks-launch")
             if not launch_path:
                 self.logger.error("protontricks-launch command not found in PATH.")
@@ -671,7 +770,7 @@ class ProtontricksHandler:
             cmd.extend(extra_args)
         self.logger.debug(f"Running protontricks-launch: {' '.join(map(str, cmd))}")
         try:
-            # PyInstaller fix: Use cleaned environment
+            # Bundled-runtime fix: Use cleaned environment
             env = self._get_clean_subprocess_env()
             return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         except Exception as e:
@@ -685,6 +784,44 @@ class ProtontricksHandler:
         """
         env = self._get_clean_subprocess_env()
         env["WINEDEBUG"] = "-all"
+
+        # CRITICAL: Only set bundled winetricks for NATIVE protontricks
+        # Flatpak protontricks runs in a sandbox and CANNOT access AppImage FUSE mounts (/tmp/.mount_*)
+        # Flatpak protontricks has its own winetricks bundled inside the flatpak
+        if self.which_protontricks == 'native':
+            winetricks_path = self._get_bundled_winetricks_path()
+            if winetricks_path:
+                env['WINETRICKS'] = str(winetricks_path)
+                self.logger.debug(f"Set WINETRICKS for native protontricks: {winetricks_path}")
+            else:
+                self.logger.warning("Bundled winetricks not found - native protontricks will use system winetricks")
+
+            cabextract_path = self._get_bundled_cabextract_path()
+            if cabextract_path:
+                cabextract_dir = str(cabextract_path.parent)
+                current_path = env.get('PATH', '')
+                env['PATH'] = f"{cabextract_dir}{os.pathsep}{current_path}" if current_path else cabextract_dir
+                self.logger.debug(f"Added bundled cabextract to PATH for native protontricks: {cabextract_dir}")
+            else:
+                self.logger.warning("Bundled cabextract not found - native protontricks will use system cabextract")
+        else:
+            # Flatpak protontricks - DO NOT set bundled paths
+            self.logger.info(f"Using {self.which_protontricks} protontricks - it has its own winetricks (cannot access AppImage mounts)")
+
+        # CRITICAL: Suppress winetricks verbose output when not in debug mode
+        from ..handlers.config_handler import ConfigHandler
+        config_handler = ConfigHandler()
+        debug_mode = config_handler.get('debug_mode', False)
+        if not debug_mode:
+            env['WINETRICKS_SUPER_QUIET'] = '1'
+            self.logger.debug("Set WINETRICKS_SUPER_QUIET=1 in install_wine_components to suppress winetricks verbose output")
+
+        # Set up winetricks cache (shared with winetricks_handler for efficiency)
+        from jackify.shared.paths import get_jackify_data_dir
+        jackify_cache_dir = get_jackify_data_dir() / 'winetricks_cache'
+        jackify_cache_dir.mkdir(parents=True, exist_ok=True)
+        env['WINETRICKS_CACHE'] = str(jackify_cache_dir)
+        self.logger.info(f"Using winetricks cache: {jackify_cache_dir}")
         if specific_components is not None:
             components_to_install = specific_components
             self.logger.info(f"Installing specific components: {components_to_install}")
@@ -716,8 +853,25 @@ class ProtontricksHandler:
                         # Continue to retry
                 else:
                     self.logger.error(f"Protontricks command failed (Attempt {attempt}/{max_attempts}). Return Code: {result.returncode if result else 'N/A'}")
-                    self.logger.error(f"Stdout: {result.stdout.strip() if result else ''}")
-                    self.logger.error(f"Stderr: {result.stderr.strip() if result else ''}")
+                    # Only show stdout/stderr in debug mode to avoid verbose output
+                    from ..handlers.config_handler import ConfigHandler
+                    config_handler = ConfigHandler()
+                    debug_mode = config_handler.get('debug_mode', False)
+                    if debug_mode:
+                        self.logger.error(f"Stdout: {result.stdout.strip() if result else ''}")
+                        self.logger.error(f"Stderr: {result.stderr.strip() if result else ''}")
+                    else:
+                        # In non-debug mode, only show stderr if it contains actual errors (not verbose winetricks output)
+                        if result and result.stderr:
+                            stderr_lower = result.stderr.lower()
+                            # Filter out verbose winetricks messages
+                            if any(keyword in stderr_lower for keyword in ['error', 'failed', 'cannot', 'warning: cannot find']):
+                                # Only show actual errors, not "Executing..." messages
+                                error_lines = [line for line in result.stderr.strip().split('\n') 
+                                             if any(keyword in line.lower() for keyword in ['error', 'failed', 'cannot', 'warning: cannot find'])
+                                             and 'executing' not in line.lower()]
+                                if error_lines:
+                                    self.logger.error(f"Stderr (errors only): {' '.join(error_lines)}")
             except Exception as e:
                 self.logger.error(f"Error during protontricks run (Attempt {attempt}/{max_attempts}): {e}", exc_info=True)
         self.logger.error(f"Failed to install Wine components after {max_attempts} attempts.")

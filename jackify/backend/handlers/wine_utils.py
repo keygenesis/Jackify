@@ -1016,8 +1016,8 @@ class WineUtils:
                 seen_names.add(version['name'])
 
         if unique_versions:
-            logger.info(f"Found {len(unique_versions)} total Proton version(s)")
-            logger.info(f"Best available: {unique_versions[0]['name']} ({unique_versions[0]['type']})")
+            logger.debug(f"Found {len(unique_versions)} total Proton version(s)")
+            logger.debug(f"Best available: {unique_versions[0]['name']} ({unique_versions[0]['type']})")
         else:
             logger.warning("No Proton versions found")
 

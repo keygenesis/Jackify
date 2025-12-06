@@ -863,60 +863,6 @@ class MenuHandler:
             self.logger.debug("_clear_screen: Clearing screen for POSIX by printing 100 newlines.")
             print("\n" * 100, flush=True)
 
-    def show_hoolamike_menu(self, cli_instance):
-        """Show the Hoolamike Modlist Management menu"""
-        if not hasattr(cli_instance, 'hoolamike_handler') or cli_instance.hoolamike_handler is None:
-            try:
-                from .hoolamike_handler import HoolamikeHandler
-                cli_instance.hoolamike_handler = HoolamikeHandler(
-                    steamdeck=getattr(cli_instance, 'steamdeck', False),
-                    verbose=getattr(cli_instance, 'verbose', False),
-                    filesystem_handler=getattr(cli_instance, 'filesystem_handler', None),
-                    config_handler=getattr(cli_instance, 'config_handler', None),
-                    menu_handler=self
-                )
-            except Exception as e:
-                self.logger.error(f"Failed to initialize Hoolamike features: {e}", exc_info=True)
-                print(f"{COLOR_ERROR}Error: Failed to initialize Hoolamike features. Check logs.{COLOR_RESET}")
-                input("\nPress Enter to return to the main menu...")
-                return # Exit this menu if handler fails
-
-        while True:
-            self._clear_screen()
-            # Banner display handled by frontend
-            # Use print_section_header for consistency if available, otherwise manual with COLOR_SELECTION
-            if hasattr(self, 'print_section_header'): # Check if method exists (it's from ui_utils)
-                print_section_header("Hoolamike Modlist Management")
-            else: # Fallback if not imported or available directly on self
-                print(f"{COLOR_SELECTION}Hoolamike Modlist Management{COLOR_RESET}")
-                print(f"{COLOR_SELECTION}{'-'*30}{COLOR_RESET}")
-            
-            print(f"{COLOR_SELECTION}1.{COLOR_RESET} Install or Update Hoolamike App")
-            print(f"{COLOR_SELECTION}2.{COLOR_RESET} Install Modlist (Nexus Premium)")
-            print(f"{COLOR_SELECTION}3.{COLOR_RESET} Install Modlist (Non-Premium) {COLOR_DISABLED}(Not Implemented){COLOR_RESET}")
-            print(f"{COLOR_SELECTION}4.{COLOR_RESET} Install Tale of Two Wastelands (TTW)")
-            print(f"{COLOR_SELECTION}5.{COLOR_RESET} Edit Hoolamike Configuration")
-            print(f"{COLOR_SELECTION}0.{COLOR_RESET} Return to Main Menu")
-            selection = input(f"\n{COLOR_PROMPT}Enter your selection (0-5): {COLOR_RESET}").strip()
-            
-            if selection.lower() == 'q': # Allow 'q' to re-display menu
-                continue
-            if selection == "1":
-                cli_instance.hoolamike_handler.install_update_hoolamike()
-            elif selection == "2":
-                cli_instance.hoolamike_handler.install_modlist(premium=True)
-            elif selection == "3":
-                print(f"{COLOR_INFO}Install Modlist (Non-Premium) is not yet implemented.{COLOR_RESET}")
-                input("\nPress Enter to return to the Hoolamike menu...")
-            elif selection == "4":
-                cli_instance.hoolamike_handler.install_ttw()
-            elif selection == "5":
-                cli_instance.hoolamike_handler.edit_hoolamike_config()
-            elif selection == "0":
-                break
-            else:
-                print("Invalid selection. Please try again.")
-                time.sleep(1)
 
 
 

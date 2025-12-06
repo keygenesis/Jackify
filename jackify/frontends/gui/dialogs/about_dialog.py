@@ -304,11 +304,12 @@ class AboutDialog(QDialog):
     def _get_engine_version(self) -> str:
         """Get jackify-engine version."""
         try:
-            # Try to execute jackify-engine --version  
+            # Try to execute jackify-engine --version
             engine_path = Path(__file__).parent.parent.parent.parent / "engine" / "jackify-engine"
             if engine_path.exists():
-                result = subprocess.run([str(engine_path), "--version"], 
-                                      capture_output=True, text=True, timeout=5)
+                from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
+                result = subprocess.run([str(engine_path), "--version"],
+                                      capture_output=True, text=True, timeout=5, env=get_clean_subprocess_env())
                 if result.returncode == 0:
                     version = result.stdout.strip()
                     # Extract just the version number (before the +commit hash)

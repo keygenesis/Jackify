@@ -29,9 +29,10 @@ class AutomatedPrefixService:
     and direct Proton wrapper integration.
     """
     
-    def __init__(self):
+    def __init__(self, system_info=None):
         self.scripts_dir = Path.home() / "Jackify/scripts"
         self.scripts_dir.mkdir(parents=True, exist_ok=True)
+        self.system_info = system_info
         # Use shared timing for consistency across services
     
     def _get_progress_timestamp(self):
@@ -546,13 +547,15 @@ exit"""
     def restart_steam(self) -> bool:
         """
         Restart Steam using the robust service method.
-        
+
         Returns:
             True if successful, False otherwise
         """
         try:
             from .steam_restart_service import robust_steam_restart
-            return robust_steam_restart(progress_callback=None, timeout=60)
+            # Use system_info if available (backward compatibility)
+            system_info = getattr(self, 'system_info', None)
+            return robust_steam_restart(progress_callback=None, timeout=60, system_info=system_info)
         except Exception as e:
             logger.error(f"Error restarting Steam: {e}")
             return False
@@ -929,22 +932,35 @@ echo Prefix creation complete.
             # Get or create CompatToolMapping
             if 'CompatToolMapping' not in config_data['Software']['Valve']['Steam']:
                 config_data['Software']['Valve']['Steam']['CompatToolMapping'] = {}
-            
-            # Set the Proton version for this AppID
-            config_data['Software']['Valve']['Steam']['CompatToolMapping'][str(appid)] = proton_version
+
+            # Set the Proton version for this AppID using Steam's expected format
+            # Steam requires a dict with 'name', 'config', and 'priority' keys
+            config_data['Software']['Valve']['Steam']['CompatToolMapping'][str(appid)] = {
+                'name': proton_version,
+                'config': '',
+                'priority': '250'
+            }
             
             # Write back to file (text format)
             with open(config_path, 'w') as f:
                 vdf.dump(config_data, f)
-            
+
+            # Ensure file is fully written to disk before Steam restart
+            import os
+            os.fsync(f.fileno()) if hasattr(f, 'fileno') else None
+
             logger.info(f"Set Proton version {proton_version} for AppID {appid}")
             debug_print(f"[DEBUG] Set Proton version {proton_version} for AppID {appid} in config.vdf")
-            
+
+            # Small delay to ensure filesystem write completes
+            import time
+            time.sleep(0.5)
+
             # Verify it was set correctly
             with open(config_path, 'r') as f:
                 verify_data = vdf.load(f)
-            actual_value = verify_data.get('Software', {}).get('Valve', {}).get('Steam', {}).get('CompatToolMapping', {}).get(str(appid))
-            debug_print(f"[DEBUG] Verification: AppID {appid} -> {actual_value}")
+            compat_mapping = verify_data.get('Software', {}).get('Valve', {}).get('Steam', {}).get('CompatToolMapping', {}).get(str(appid))
+            debug_print(f"[DEBUG] Verification: AppID {appid} -> {compat_mapping}")
             
             return True
             
@@ -1045,7 +1061,18 @@ echo Prefix creation complete.
         env = os.environ.copy()
         env['STEAM_COMPAT_DATA_PATH'] = str(prefix_path)
         env['STEAM_COMPAT_APP_ID'] = str(positive_appid)  # Use positive AppID for environment
-        env['STEAM_COMPAT_CLIENT_INSTALL_PATH'] = str(Path.home() / ".local/share/Steam")
+        
+        # Determine correct Steam root based on installation type
+        from ..handlers.path_handler import PathHandler
+        path_handler = PathHandler()
+        steam_library = path_handler.find_steam_library()
+        if steam_library and steam_library.name == "common":
+            # Extract Steam root from library path: .../Steam/steamapps/common -> .../Steam
+            steam_root = steam_library.parent.parent
+            env['STEAM_COMPAT_CLIENT_INSTALL_PATH'] = str(steam_root)
+        else:
+            # Fallback to legacy path if detection fails
+            env['STEAM_COMPAT_CLIENT_INSTALL_PATH'] = str(Path.home() / ".local/share/Steam")
         
         # Build the command
         cmd = [
@@ -1109,7 +1136,10 @@ echo Prefix creation complete.
     
     def _get_compatdata_path_for_appid(self, appid: int) -> Optional[Path]:
         """
-        Get the compatdata path for a given AppID using existing Jackify functions.
+        Get the compatdata path for a given AppID.
+        
+        First tries to find existing compatdata, then constructs path from libraryfolders.vdf
+        for creating new prefixes.
         
         Args:
             appid: The AppID to get the path for
@@ -1117,22 +1147,32 @@ echo Prefix creation complete.
         Returns:
             Path to the compatdata directory, or None if not found
         """
-        # Use existing Jackify path detection
         from ..handlers.path_handler import PathHandler
         
+        # First, try to find existing compatdata
         compatdata_path = PathHandler.find_compat_data(str(appid))
         if compatdata_path:
             return compatdata_path
         
-        # Fallback: construct the path manually
-        possible_bases = [
+        # Prefix doesn't exist yet - determine where to create it from libraryfolders.vdf
+        library_paths = PathHandler.get_all_steam_library_paths()
+        if library_paths:
+            # Use the first library (typically the default library)
+            # Construct compatdata path: library_path/steamapps/compatdata/appid
+            first_library = library_paths[0]
+            compatdata_base = first_library / "steamapps" / "compatdata"
+            return compatdata_base / str(appid)
+        
+        # Only fallback if VDF parsing completely fails
+        logger.warning("Could not get library paths from libraryfolders.vdf, using fallback locations")
+        fallback_bases = [
+            Path.home() / ".var/app/com.valvesoftware.Steam/data/Steam/steamapps/compatdata",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/compatdata",
             Path.home() / ".steam/steam/steamapps/compatdata",
             Path.home() / ".local/share/Steam/steamapps/compatdata",
-            Path.home() / ".var/app/com.valvesoftware.Steam/home/.steam/steam/steamapps/compatdata",
-            Path.home() / ".var/app/com.valvesoftware.Steam/home/.local/share/Steam/steamapps/compatdata",
         ]
         
-        for base_path in possible_bases:
+        for base_path in fallback_bases:
             if base_path.is_dir():
                 return base_path / str(appid)
         
@@ -2666,9 +2706,40 @@ echo Prefix creation complete.
             True if successful, False otherwise
         """
         try:
-            steam_root = Path.home() / ".steam/steam"
-            compatdata_dir = steam_root / "steamapps/compatdata"
-            proton_common_dir = steam_root / "steamapps/common"
+            # Determine Steam locations based on installation type
+            from ..handlers.path_handler import PathHandler
+            path_handler = PathHandler()
+            all_libraries = path_handler.get_all_steam_library_paths()
+            
+            # Check if we have Flatpak Steam by looking for .var/app/com.valvesoftware.Steam in library paths
+            is_flatpak_steam = any('.var/app/com.valvesoftware.Steam' in str(lib) for lib in all_libraries)
+            
+            if is_flatpak_steam and all_libraries:
+                # Flatpak Steam: Use the actual library root from libraryfolders.vdf
+                # Compatdata should be in the library root, not the client root
+                flatpak_library_root = all_libraries[0]  # Use first library (typically the default)
+                flatpak_client_root = flatpak_library_root.parent.parent / ".steam/steam"
+                
+                if not flatpak_library_root.is_dir():
+                    logger.error(
+                        f"Flatpak Steam library root does not exist: {flatpak_library_root}"
+                    )
+                    return False
+                
+                steam_root = flatpak_client_root if flatpak_client_root.is_dir() else flatpak_library_root
+                # CRITICAL: compatdata must be in the library root, not client root
+                compatdata_dir = flatpak_library_root / "steamapps/compatdata"
+                proton_common_dir = flatpak_library_root / "steamapps/common"
+            else:
+                # Native Steam (or unknown): fall back to legacy ~/.steam/steam layout
+                steam_root = Path.home() / ".steam/steam"
+                compatdata_dir = steam_root / "steamapps/compatdata"
+                proton_common_dir = steam_root / "steamapps/common"
+            
+            # Ensure compatdata root exists and is a directory we actually want to use
+            if not compatdata_dir.is_dir():
+                logger.error(f"Compatdata root does not exist: {compatdata_dir}. Aborting prefix creation.")
+                return False
             
             # Find a Proton wrapper to use
             proton_path = self._find_proton_binary(proton_common_dir)
@@ -2686,9 +2757,9 @@ echo Prefix creation complete.
             env['WINEDEBUG'] = '-all'
             env['WINEDLLOVERRIDES'] = 'msdia80.dll=n;conhost.exe=d;cmd.exe=d'
             
-            # Create the compatdata directory
+            # Create the compatdata directory for this AppID (but never the whole tree)
             compat_dir = compatdata_dir / str(abs(appid))
-            compat_dir.mkdir(parents=True, exist_ok=True)
+            compat_dir.mkdir(exist_ok=True)
             
             logger.info(f"Creating Proton prefix for AppID {appid}")
             logger.info(f"STEAM_COMPAT_CLIENT_INSTALL_PATH={env['STEAM_COMPAT_CLIENT_INSTALL_PATH']}")

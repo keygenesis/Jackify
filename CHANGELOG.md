@@ -1,5 +1,95 @@
 # Jackify Changelog
 
+## v0.2.0 - Modlist Gallery, OAuth Authentication & Performance Improvements
+**Release Date:** 2025-12-06
+
+### Major Features
+
+#### Modlist Selection Gallery
+Complete overhaul of modlist selection (First pass):
+
+**Core Features:**
+- Card-based Modlist Selection browser with modlist images, titles, authors and metadata
+- Game-specific filtering automatically applied based on selected game type
+- Details per card: download/install/total sizes, tags, version, badges
+- Async image loading from GitHub with local 7-day caching
+- Detail view with full descriptions, banner images, and external links
+- Selected modlist automatically populates Install Modlist workflow
+
+**Search and Filtering:**
+- Text search across modlist names and descriptions
+- Multi-select tag filtering with normalized tags
+- Show Official Only, Show NSFW, Hide Unavailable toggles
+- Mod search capability - find modlists containing specific Nexus mods
+- Randomised card ordering
+
+**Performance:**
+- Gallery images loading from cache
+- Background metadata and image preloading when Install Modlist screen opens
+- Efficient rendering - cards created once, filters toggle visibility
+- Non-blocking UI with concurrent image downloads
+
+**Steam Deck Optimized:**
+- Dynamic card sizing (e.g 250x270 on Steam Deck, larger on desktop)
+- Responsive grid layout (up to 4 columns on large screens, 3 on Steam Deck)
+- Optimized spacing and padding for 1280x800 displays
+
+#### OAuth 2.0 Authentication
+Modern authentication for Nexus Mods with secure token management:
+
+- One-click browser-based authorization with PKCE security
+- Automatic token refresh with encrypted storage
+- Authorisation status indicator on Install Modlist screen
+- Works in both GUI and CLI workflows
+
+#### Compact Mode UI Redesign
+Streamlined interface with dynamic window management:
+
+- Default compact mode with optional Details view
+- Activity window tab (default), across all workflow screens
+- Process Monitor tab still available 
+- Show Details toggle for console output when needed
+
+### Critical Fixes
+
+### Replaced TTW Installer
+- Replaced the previous TTW Installer due to complexities with its config file
+
+#### GPU Texture Conversion (jackify-engine 0.4.0)
+- Fixed GPU not being used for BC7/BC6H texture conversions
+- Previous versions fell back to CPU-only despite GPU availability
+- Added GPU toggle in Settings (enabled by default)
+
+#### Winetricks Compatibility & Protontricks
+- Fixed bundled winetricks path incompatibility
+- Hopefully fixed winetricks in cases where it failed to download components
+- For now, Jackify still defaults to bundled winetricks (Protontricks toggle in settings)
+
+#### Steam Restart Reliability
+- Enhanced Steam Restart so that is now hopefully works more reliably on all distros
+- Fixed Flatpak detection blocking normal Steam start methods
+
+### Technical Improvements
+
+- Proton version usage clarified: Install Proton for installation/texture processing, Game Proton for shortcuts
+- Centralised Steam detection in SystemInfo
+- ConfigHandler refactored to always read fresh from disk
+- Removed obsolete dotnet4.x code
+- Enhanced Flatpak Steam compatdata detection with proper VDF parsing
+
+### Bug Fixes
+
+- TTW installation UI performance (batched output processing, non-blocking operations)
+- Activity window animations (removed custom timers, Qt native rendering)
+- Timer reset when returning from TTW screen
+- Fixed bandwidth limit KB/s to bytes conversion
+- Fixed AttributeError in AutomatedPrefixService.restart_steam()
+
+### Engine Updates
+- jackify-engine 0.4.0 with GPU texture conversion fixes and refactored file progress reporting
+
+---
+
 ## v0.1.7.1 - Wine Component Verification & Flatpak Steam Fixes
 **Release Date:** November 11, 2025
 
@@ -478,6 +568,23 @@ laf  - TTW Installation function using Hoolamike application - https://github.co
 - **Simplified Navigation**: ModlistTasksScreen now functions as pure navigation menu to existing workflows
 - **Clean Architecture**: Removed obsolete service imports, initializations, and cleanup methods
 - **Code Quality**: Eliminated "tombstone comments" and unused service references
+
+### Deferred Features (Available in Future Release)
+
+#### OAuth 2.0 Authentication for Nexus Mods
+**Status:** Fully implemented but disabled pending Nexus Mods approval
+
+The OAuth 2.0 authentication system has been fully developed and tested, but is temporarily disabled in v0.1.8 as we await approval from Nexus Mods for our OAuth application. The backend code remains intact and will be re-enabled immediately upon approval.
+
+**Features (ready for deployment):**
+- **Secure OAuth 2.0 + PKCE Flow**: Modern authentication to replace API key dependency
+- **Encrypted Token Storage**: Tokens stored using Fernet encryption with automatic refresh
+- **GUI Integration**: Clean status display on Install Modlist screen with authorize/revoke functionality
+- **CLI Integration**: OAuth menu in Additional Tasks for command-line users
+- **API Key Fallback**: Optional legacy API key support (configurable in Settings)
+- **Unified Auth Service**: Single authentication layer supporting both OAuth and API key methods
+
+**Current Limitation:** Awaiting Nexus approval for `jackify://oauth/callback` custom URI. Once approved, OAuth will be enabled as the primary authentication method with API key as optional fallback.
 
 ### Technical Details
 - **Single Shortcut Creation Path**: All workflows now use `run_working_workflow()` → `create_shortcut_with_native_service()`

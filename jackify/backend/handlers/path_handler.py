@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 from typing import Optional, Union, Dict, Any, List, Tuple
 from datetime import datetime
+import vdf
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -258,7 +259,7 @@ class PathHandler:
             return False
     
     @staticmethod
-    def create_dxvk_conf(modlist_dir, modlist_sdcard, steam_library, basegame_sdcard, game_var_full, vanilla_game_dir=None):
+    def create_dxvk_conf(modlist_dir, modlist_sdcard, steam_library, basegame_sdcard, game_var_full, vanilla_game_dir=None, stock_game_path=None):
         """
         Create dxvk.conf file in the appropriate location
         
@@ -269,6 +270,7 @@ class PathHandler:
             basegame_sdcard (bool): Whether the base game is on an SD card
             game_var_full (str): Full name of the game (e.g., "Skyrim Special Edition")
             vanilla_game_dir (str): Optional path to vanilla game directory for fallback
+            stock_game_path (str): Direct path to detected stock game directory (if available)
             
         Returns:
             bool: True on success, False on failure
@@ -276,49 +278,45 @@ class PathHandler:
         try:
             logger.info("Creating dxvk.conf file...")
             
-            # Determine the location for dxvk.conf
-            dxvk_conf_path = None
+            candidate_dirs = PathHandler._build_dxvk_candidate_dirs(
+                modlist_dir=modlist_dir,
+                stock_game_path=stock_game_path,
+                steam_library=steam_library,
+                game_var_full=game_var_full,
+                vanilla_game_dir=vanilla_game_dir
+            )
             
-            # Check for common stock game directories first, then vanilla as fallback
-            stock_game_paths = [
-                os.path.join(modlist_dir, "Stock Game"),
-                os.path.join(modlist_dir, "Game Root"),
-                os.path.join(modlist_dir, "STOCK GAME"),
-                os.path.join(modlist_dir, "Stock Game Folder"),
-                os.path.join(modlist_dir, "Stock Folder"),
-                os.path.join(modlist_dir, "Skyrim Stock"),
-                os.path.join(modlist_dir, "root", "Skyrim Special Edition")
-            ]
+            if not candidate_dirs:
+                logger.error("Could not determine location for dxvk.conf (no candidate directories found)")
+                return False
             
-            # Add vanilla game directory as fallback if steam_library and game_var_full are provided
-            if steam_library and game_var_full:
-                stock_game_paths.append(os.path.join(steam_library, "steamapps", "common", game_var_full))
-            
-            for path in stock_game_paths:
-                if os.path.exists(path):
-                    dxvk_conf_path = os.path.join(path, "dxvk.conf")
+            target_dir = None
+            for directory in candidate_dirs:
+                if directory.is_dir():
+                    target_dir = directory
                     break
             
-            if not dxvk_conf_path:
-                # Fallback: Try vanilla game directory if provided
-                if vanilla_game_dir and os.path.exists(vanilla_game_dir):
-                    logger.info(f"Attempting fallback to vanilla game directory: {vanilla_game_dir}")
-                    dxvk_conf_path = os.path.join(vanilla_game_dir, "dxvk.conf")
-                    logger.info(f"Using vanilla game directory for dxvk.conf: {dxvk_conf_path}")
+            if target_dir is None:
+                fallback_dir = Path(modlist_dir) if modlist_dir and Path(modlist_dir).is_dir() else None
+                if fallback_dir:
+                    logger.warning(f"No stock/vanilla directories found; falling back to modlist directory: {fallback_dir}")
+                    target_dir = fallback_dir
                 else:
-                    logger.error("Could not determine location for dxvk.conf")
+                    logger.error("All candidate directories for dxvk.conf are missing.")
                     return False
+            
+            dxvk_conf_path = target_dir / "dxvk.conf"
             
             # The required line that Jackify needs
             required_line = "dxvk.enableGraphicsPipelineLibrary = False"
             
             # Check if dxvk.conf already exists
-            if os.path.exists(dxvk_conf_path):
+            if dxvk_conf_path.exists():
                 logger.info(f"Found existing dxvk.conf at {dxvk_conf_path}")
                 
                 # Read existing content
                 try:
-                    with open(dxvk_conf_path, 'r') as f:
+                    with open(dxvk_conf_path, 'r', encoding='utf-8') as f:
                         existing_content = f.read().strip()
                     
                     # Check if our required line is already present
@@ -339,7 +337,7 @@ class PathHandler:
                             updated_content = required_line + '\n'
                             logger.info("Adding required DXVK setting to empty file")
                         
-                        with open(dxvk_conf_path, 'w') as f:
+                        with open(dxvk_conf_path, 'w', encoding='utf-8') as f:
                             f.write(updated_content)
                         
                         logger.info(f"dxvk.conf updated successfully at {dxvk_conf_path}")
@@ -353,7 +351,8 @@ class PathHandler:
             # Create new dxvk.conf file (original behavior)
             dxvk_conf_content = required_line + '\n'
             
-            with open(dxvk_conf_path, 'w') as f:
+            dxvk_conf_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(dxvk_conf_path, 'w', encoding='utf-8') as f:
                 f.write(dxvk_conf_content)
             
             logger.info(f"dxvk.conf created successfully at {dxvk_conf_path}")
@@ -362,6 +361,99 @@ class PathHandler:
         except Exception as e:
             logger.error(f"Error creating dxvk.conf: {e}")
             return False
+
+    @staticmethod
+    def verify_dxvk_conf_exists(modlist_dir, steam_library, game_var_full, vanilla_game_dir=None, stock_game_path=None) -> bool:
+        """
+        Verify that dxvk.conf exists in at least one of the candidate directories and contains the required setting.
+        """
+        required_line = "dxvk.enableGraphicsPipelineLibrary = False"
+        candidate_dirs = PathHandler._build_dxvk_candidate_dirs(
+            modlist_dir=modlist_dir,
+            stock_game_path=stock_game_path,
+            steam_library=steam_library,
+            game_var_full=game_var_full,
+            vanilla_game_dir=vanilla_game_dir
+        )
+        
+        for directory in candidate_dirs:
+            conf_path = directory / "dxvk.conf"
+            if conf_path.is_file():
+                try:
+                    with open(conf_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    if required_line not in content:
+                        logger.warning(f"dxvk.conf found at {conf_path} but missing required setting. Appending now.")
+                        with open(conf_path, 'a', encoding='utf-8') as f:
+                            if not content.endswith('\n'):
+                                f.write('\n')
+                            f.write(required_line + '\n')
+                    logger.info(f"Verified dxvk.conf at {conf_path}")
+                    return True
+                except Exception as e:
+                    logger.warning(f"Failed to verify dxvk.conf at {conf_path}: {e}")
+        
+        logger.warning("dxvk.conf verification failed - file not found in any candidate directory.")
+        return False
+
+    @staticmethod
+    def _normalize_common_library_path(steam_library: Optional[str]) -> Optional[Path]:
+        if not steam_library:
+            return None
+        path = Path(steam_library)
+        parts_lower = [part.lower() for part in path.parts]
+        if len(parts_lower) >= 2 and parts_lower[-2:] == ['steamapps', 'common']:
+            return path
+        if parts_lower and parts_lower[-1] == 'common':
+            return path
+        if 'steamapps' in parts_lower:
+            idx = parts_lower.index('steamapps')
+            truncated = Path(*path.parts[:idx + 1])
+            return truncated / 'common'
+        return path / 'steamapps' / 'common'
+
+    @staticmethod
+    def _build_dxvk_candidate_dirs(modlist_dir, stock_game_path, steam_library, game_var_full, vanilla_game_dir) -> List[Path]:
+        candidates: List[Path] = []
+        seen = set()
+
+        def add_candidate(path_obj: Optional[Path]):
+            if not path_obj:
+                return
+            key = path_obj.resolve() if path_obj.exists() else path_obj
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(path_obj)
+
+        if stock_game_path:
+            add_candidate(Path(stock_game_path))
+
+        if modlist_dir:
+            base_path = Path(modlist_dir)
+            common_names = [
+                "Stock Game",
+                "Game Root",
+                "STOCK GAME",
+                "Stock Game Folder",
+                "Stock Folder",
+                "Skyrim Stock",
+                os.path.join("root", "Skyrim Special Edition")
+            ]
+            for name in common_names:
+                add_candidate(base_path / name)
+
+        steam_common = PathHandler._normalize_common_library_path(steam_library)
+        if steam_common and game_var_full:
+            add_candidate(steam_common / game_var_full)
+
+        if vanilla_game_dir:
+            add_candidate(Path(vanilla_game_dir))
+
+        if modlist_dir:
+            add_candidate(Path(modlist_dir))
+
+        return candidates
     
     @staticmethod
     def find_steam_config_vdf() -> Optional[Path]:
@@ -491,40 +583,53 @@ class PathHandler:
 
         logger.debug(f"Searching for compatdata directory for AppID: {appid}")
         
-        # Use libraryfolders.vdf to find all Steam library paths
+        # Use libraryfolders.vdf to find all Steam library paths, when available
         library_paths = PathHandler.get_all_steam_library_paths()
-        if not library_paths:
-            logger.error("Could not find any Steam library paths from libraryfolders.vdf")
-            return None
+        if library_paths:
+            logger.debug(f"Checking compatdata in {len(library_paths)} Steam libraries")
+            
+            # Check each Steam library's compatdata directory
+            for library_path in library_paths:
+                compatdata_base = library_path / "steamapps" / "compatdata"
+                if not compatdata_base.is_dir():
+                    logger.debug(f"Compatdata directory does not exist: {compatdata_base}")
+                    continue
+                    
+                potential_path = compatdata_base / appid
+                if potential_path.is_dir():
+                    logger.info(f"Found compatdata directory: {potential_path}")
+                    return potential_path
+                else:
+                    logger.debug(f"Compatdata for AppID {appid} not found in {compatdata_base}")
         
-        logger.debug(f"Checking compatdata in {len(library_paths)} Steam libraries")
+        # Check fallback locations only if we didn't find valid libraries
+        # If we have valid libraries from libraryfolders.vdf, we should NOT fall back to wrong locations
+        is_flatpak_steam = any('.var/app/com.valvesoftware.Steam' in str(lib) for lib in library_paths) if library_paths else False
         
-        # Check each Steam library's compatdata directory
-        for library_path in library_paths:
-            compatdata_base = library_path / "steamapps" / "compatdata"
-            if not compatdata_base.is_dir():
-                logger.debug(f"Compatdata directory does not exist: {compatdata_base}")
-                continue
-                
-            potential_path = compatdata_base / appid
-            if potential_path.is_dir():
-                logger.info(f"Found compatdata directory: {potential_path}")
-                return potential_path
+        if not library_paths or is_flatpak_steam:
+            # Only check Flatpak-specific fallbacks if we have Flatpak Steam
+            logger.debug("Checking fallback compatdata locations...")
+            if is_flatpak_steam:
+                # For Flatpak Steam, only check Flatpak-specific locations
+                fallback_locations = [
+                    Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/compatdata",
+                    Path.home() / ".var/app/com.valvesoftware.Steam/data/Steam/steamapps/compatdata",
+                ]
             else:
-                logger.debug(f"Compatdata for AppID {appid} not found in {compatdata_base}")
-
-        # Fallback: Broad search (can be slow, consider if needed)
-        # try:
-        #     logger.debug(f"Compatdata not found in standard locations, attempting wider search...")
-        #     # This can be very slow and resource-intensive
-        #     # find_output = subprocess.check_output(['find', '/', '-type', 'd', '-name', appid, '-path', '*/compatdata/*', '-print', '-quit', '2>/dev/null'], text=True).strip()
-        #     # if find_output:
-        #     #     logger.info(f"Found compatdata via find command: {find_output}")
-        #     #     return Path(find_output)
-        # except Exception as e:
-        #     logger.warning(f"Error during 'find' command for compatdata: {e}")
-
-        logger.warning(f"Compatdata directory for AppID {appid} not found.")
+                # For native Steam or unknown, check standard locations
+                fallback_locations = [
+                    Path.home() / ".local/share/Steam/steamapps/compatdata",
+                    Path.home() / ".steam/steam/steamapps/compatdata",
+                ]
+            
+            for compatdata_base in fallback_locations:
+                if compatdata_base.is_dir():
+                    potential_path = compatdata_base / appid
+                    if potential_path.is_dir():
+                        logger.warning(f"Found compatdata directory in fallback location (may be from old incorrect creation): {potential_path}")
+                        return potential_path
+        
+        logger.warning(f"Compatdata directory for AppID {appid} not found in any Steam library or fallback location.")
         return None
     
     @staticmethod
@@ -617,14 +722,22 @@ class PathHandler:
             if vdf_path.is_file():
                 logger.info(f"[DEBUG] Parsing libraryfolders.vdf: {vdf_path}")
                 try:
-                    with open(vdf_path) as f:
-                        for line in f:
-                            m = re.search(r'"path"\s*"([^"]+)"', line)
-                            if m:
-                                lib_path = Path(m.group(1))
+                    with open(vdf_path, 'r', encoding='utf-8') as f:
+                        data = vdf.load(f)
+                        # libraryfolders.vdf structure: libraryfolders -> "0", "1", etc. -> "path"
+                        libraryfolders = data.get('libraryfolders', {})
+                        for key, lib_data in libraryfolders.items():
+                            if isinstance(lib_data, dict) and 'path' in lib_data:
+                                lib_path = Path(lib_data['path'])
                                 # Resolve symlinks for consistency (mmcblk0p1 -> deck/UUID)
-                                resolved_path = lib_path.resolve()
-                                library_paths.add(resolved_path)
+                                try:
+                                    resolved_path = lib_path.resolve()
+                                    library_paths.add(resolved_path)
+                                    logger.debug(f"[DEBUG] Found library path: {resolved_path}")
+                                except (OSError, RuntimeError) as resolve_err:
+                                    # If resolve fails, use original path
+                                    logger.warning(f"[DEBUG] Could not resolve {lib_path}, using as-is: {resolve_err}")
+                                    library_paths.add(lib_path)
                 except Exception as e:
                     logger.error(f"[DEBUG] Failed to parse {vdf_path}: {e}")
         logger.info(f"[DEBUG] All detected Steam libraries: {library_paths}")

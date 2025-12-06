@@ -30,6 +30,8 @@ def _get_user_proton_version():
         from jackify.backend.handlers.wine_utils import WineUtils
 
         config_handler = ConfigHandler()
+        # Use Install Proton (not Game Proton) for installation/texture processing
+        # get_proton_path() returns the Install Proton path
         user_proton_path = config_handler.get_proton_path()
 
         if user_proton_path == 'auto':
@@ -90,15 +92,15 @@ def get_jackify_engine_path():
         logger.debug(f"Using engine from environment variable: {env_engine_path}")
         return env_engine_path
     
-    # Priority 2: PyInstaller bundle (most specific detection)
+    # Priority 2: Frozen bundle (most specific detection)
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        # Running in a PyInstaller bundle
+        # Running inside a frozen bundle
         # Engine is expected at <bundle_root>/jackify/engine/jackify-engine
         engine_path = os.path.join(sys._MEIPASS, 'jackify', 'engine', 'jackify-engine')
         if os.path.exists(engine_path):
             return engine_path
         # Fallback: log warning but continue to other detection methods
-        logger.warning(f"PyInstaller engine not found at expected path: {engine_path}")
+        logger.warning(f"Frozen-bundle engine not found at expected path: {engine_path}")
     
     # Priority 3: Check if THIS process is actually running from Jackify AppImage
     # (not just inheriting APPDIR from another AppImage like Cursor)
@@ -123,7 +125,7 @@ def get_jackify_engine_path():
         
     # If all else fails, log error and return the source path anyway
     logger.error(f"jackify-engine not found in any expected location. Tried:")
-    logger.error(f"  PyInstaller: {getattr(sys, '_MEIPASS', 'N/A')}/jackify/engine/jackify-engine")
+    logger.error(f"  Frozen bundle: {getattr(sys, '_MEIPASS', 'N/A')}/jackify/engine/jackify-engine")
     logger.error(f"  AppImage: {appdir or 'N/A'}/opt/jackify/engine/jackify-engine") 
     logger.error(f"  Source: {engine_path}")
     logger.error("This will likely cause installation failures.")
@@ -481,53 +483,76 @@ class ModlistInstallCLI:
             self.context['download_dir'] = download_dir_path
         self.logger.debug(f"Download directory context set to: {self.context['download_dir']}")
         
-        # 5. Prompt for Nexus API key (skip if in context and valid)
+        # 5. Get Nexus authentication (OAuth or API key)
         if 'nexus_api_key' not in self.context or not self.context.get('nexus_api_key'):
-            from jackify.backend.services.api_key_service import APIKeyService
-            api_key_service = APIKeyService()
-            saved_key = api_key_service.get_saved_api_key()
-            api_key = None
-            if saved_key:
-                print("\n" + "-" * 28)
-                print(f"{COLOR_INFO}A Nexus API Key is already saved.{COLOR_RESET}")
-                use_saved = input(f"{COLOR_PROMPT}Use the saved API key? [Y/n]: {COLOR_RESET}").strip().lower()
-                if use_saved in ('', 'y', 'yes'):
-                    api_key = saved_key
+            from jackify.backend.services.nexus_auth_service import NexusAuthService
+            auth_service = NexusAuthService()
+
+            # Get current auth status
+            authenticated, method, username = auth_service.get_auth_status()
+
+            if authenticated:
+                # Already authenticated - use existing auth
+                if method == 'oauth':
+                    print("\n" + "-" * 28)
+                    print(f"{COLOR_SUCCESS}Nexus Authentication: Authorized via OAuth{COLOR_RESET}")
+                    if username:
+                        print(f"{COLOR_INFO}Logged in as: {username}{COLOR_RESET}")
+                elif method == 'api_key':
+                    print("\n" + "-" * 28)
+                    print(f"{COLOR_INFO}Nexus Authentication: Using API Key (Legacy){COLOR_RESET}")
+
+                # Get valid token/key
+                api_key = auth_service.ensure_valid_auth()
+                if api_key:
+                    self.context['nexus_api_key'] = api_key
                 else:
-                    new_key = input(f"{COLOR_PROMPT}Enter a new Nexus API Key (or press Enter to keep the saved one): {COLOR_RESET}").strip()
-                    if new_key:
-                        api_key = new_key
-                        replace = input(f"{COLOR_PROMPT}Replace the saved key with this one? [y/N]: {COLOR_RESET}").strip().lower()
-                        if replace == 'y':
-                            if api_key_service.save_api_key(api_key):
-                                print(f"{COLOR_SUCCESS}API key saved successfully.{COLOR_RESET}")
-                            else:
-                                print(f"{COLOR_WARNING}Failed to save API key. Using for this session only.{COLOR_RESET}")
+                    # Auth expired or invalid - prompt to set up
+                    print(f"\n{COLOR_WARNING}Your authentication has expired or is invalid.{COLOR_RESET}")
+                    authenticated = False
+
+            if not authenticated:
+                # Not authenticated - offer to set up OAuth
+                print("\n" + "-" * 28)
+                print(f"{COLOR_WARNING}Nexus Mods authentication is required for downloading mods.{COLOR_RESET}")
+                print(f"\n{COLOR_PROMPT}Would you like to authorize with Nexus now?{COLOR_RESET}")
+                print(f"{COLOR_INFO}This will open your browser for secure OAuth authorization.{COLOR_RESET}")
+
+                authorize = input(f"{COLOR_PROMPT}Authorize now? [Y/n]: {COLOR_RESET}").strip().lower()
+
+                if authorize in ('', 'y', 'yes'):
+                    # Launch OAuth authorization
+                    print(f"\n{COLOR_INFO}Starting OAuth authorization...{COLOR_RESET}")
+                    print(f"{COLOR_WARNING}Your browser will open shortly.{COLOR_RESET}")
+                    print(f"{COLOR_INFO}Note: You may see a security warning about a self-signed certificate.{COLOR_RESET}")
+                    print(f"{COLOR_INFO}This is normal - click 'Advanced' and 'Proceed' to continue.{COLOR_RESET}")
+
+                    def show_message(msg):
+                        print(f"\n{COLOR_INFO}{msg}{COLOR_RESET}")
+
+                    success = auth_service.authorize_oauth(show_browser_message_callback=show_message)
+
+                    if success:
+                        print(f"\n{COLOR_SUCCESS}OAuth authorization successful!{COLOR_RESET}")
+                        _, _, username = auth_service.get_auth_status()
+                        if username:
+                            print(f"{COLOR_INFO}Authorized as: {username}{COLOR_RESET}")
+
+                        api_key = auth_service.ensure_valid_auth()
+                        if api_key:
+                            self.context['nexus_api_key'] = api_key
                         else:
-                            print(f"{COLOR_INFO}Using new key for this session only. Saved key unchanged.{COLOR_RESET}")
+                            print(f"{COLOR_ERROR}Failed to retrieve auth token after authorization.{COLOR_RESET}")
+                            return None
                     else:
-                        api_key = saved_key
-            else:
-                print("\n" + "-" * 28)
-                print(f"{COLOR_INFO}A Nexus Mods API key is required for downloading mods.{COLOR_RESET}")
-                print(f"{COLOR_INFO}You can get your personal key at: {COLOR_SELECTION}https://www.nexusmods.com/users/myaccount?tab=api{COLOR_RESET}")
-                print(f"{COLOR_WARNING}Your API Key is NOT saved locally. It is used only for this session unless you choose to save it.{COLOR_RESET}")
-                api_key = input(f"{COLOR_PROMPT}Enter Nexus API Key (or 'q' to cancel): {COLOR_RESET}").strip()
-                if not api_key or api_key.lower() == 'q':
-                    self.logger.info("User cancelled or provided no API key.")
-                    return None
-                save = input(f"{COLOR_PROMPT}Would you like to save this API key for future use? [y/N]: {COLOR_RESET}").strip().lower()
-                if save == 'y':
-                    if api_key_service.save_api_key(api_key):
-                        print(f"{COLOR_SUCCESS}API key saved successfully.{COLOR_RESET}")
-                    else:
-                        print(f"{COLOR_WARNING}Failed to save API key. Using for this session only.{COLOR_RESET}")
+                        print(f"\n{COLOR_ERROR}OAuth authorization failed.{COLOR_RESET}")
+                        return None
                 else:
-                    print(f"{COLOR_INFO}Using API key for this session only. It will not be saved.{COLOR_RESET}")
-            
-            # Set the API key in context regardless of which path was taken
-            self.context['nexus_api_key'] = api_key
-        self.logger.debug(f"NEXUS_API_KEY is set in environment for engine (presence check).")
+                    # User declined OAuth - cancelled
+                    print(f"\n{COLOR_INFO}Authorization required to proceed. Installation cancelled.{COLOR_RESET}")
+                    self.logger.info("User declined Nexus authorization.")
+                    return None
+        self.logger.debug(f"Nexus authentication configured for engine.")
 
         # Display summary and confirm
         self._display_summary() # Ensure this method exists or implement it
@@ -622,11 +647,23 @@ class ModlistInstallCLI:
         if isinstance(download_dir_display, tuple):
             download_dir_display = download_dir_display[0] # Get the Path object from (Path, bool)
         print(f"Download Directory: {download_dir_display}")
-        
-        if self.context.get('nexus_api_key'):
-            print(f"Nexus API Key: [SET]")
+
+        # Show authentication method
+        from jackify.backend.services.nexus_auth_service import NexusAuthService
+        auth_service = NexusAuthService()
+        authenticated, method, username = auth_service.get_auth_status()
+
+        if method == 'oauth':
+            auth_display = f"Nexus Authentication: OAuth"
+            if username:
+                auth_display += f" ({username})"
+        elif method == 'api_key':
+            auth_display = "Nexus Authentication: API Key (Legacy)"
         else:
-            print(f"Nexus API Key: [NOT SET - WILL LIKELY FAIL]")
+            # Should never reach here since we validate auth before getting to summary
+            auth_display = "Nexus Authentication: Unknown"
+
+        print(auth_display)
         print(f"{COLOR_INFO}----------------------------------------{COLOR_RESET}")
 
     def configuration_phase(self):
@@ -719,7 +756,7 @@ class ModlistInstallCLI:
             # --- End Patch ---
 
             # Build command
-            cmd = [engine_path, 'install']
+            cmd = [engine_path, 'install', '--show-file-progress']
             # Determine if this is a local .wabbajack file or an online modlist
             modlist_value = self.context.get('modlist_value')
             if modlist_value and modlist_value.endswith('.wabbajack') and os.path.isfile(modlist_value):
@@ -737,6 +774,12 @@ class ModlistInstallCLI:
             if debug_mode:
                 cmd.append('--debug')
                 self.logger.info("Adding --debug flag to jackify-engine")
+
+            # Check GPU setting and add --no-gpu flag if disabled
+            gpu_enabled = config_handler.get('enable_gpu_texture_conversion', True)
+            if not gpu_enabled:
+                cmd.append('--no-gpu')
+                self.logger.info("GPU texture conversion disabled - adding --no-gpu flag to jackify-engine")
 
             # Store original environment values to restore later
             original_env_values = {
@@ -771,9 +814,11 @@ class ModlistInstallCLI:
                 else:
                     self.logger.warning(f"File descriptor limit: {message}")
                 
-                # Popen now inherits the modified os.environ because env=None
+                # Use cleaned environment to prevent AppImage variable inheritance
+                from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
+                clean_env = get_clean_subprocess_env()
                 # Store process reference for cleanup
-                self._current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False, env=None, cwd=engine_dir)
+                self._current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False, env=clean_env, cwd=engine_dir)
                 proc = self._current_process
                 
                 # Read output in binary mode to properly handle carriage returns
@@ -1512,9 +1557,21 @@ class ModlistInstallCLI:
         if isinstance(download_dir_display, tuple):
             download_dir_display = download_dir_display[0] # Get the Path object from (Path, bool)
         print(f"Download Directory: {download_dir_display}")
-        
-        if self.context.get('nexus_api_key'):
-            print(f"Nexus API Key: [SET]")
+
+        # Show authentication method
+        from jackify.backend.services.nexus_auth_service import NexusAuthService
+        auth_service = NexusAuthService()
+        authenticated, method, username = auth_service.get_auth_status()
+
+        if method == 'oauth':
+            auth_display = f"Nexus Authentication: OAuth"
+            if username:
+                auth_display += f" ({username})"
+        elif method == 'api_key':
+            auth_display = "Nexus Authentication: API Key (Legacy)"
         else:
-            print(f"Nexus API Key: [NOT SET - WILL LIKELY FAIL]")
+            # Should never reach here since we validate auth before getting to summary
+            auth_display = "Nexus Authentication: Unknown"
+
+        print(auth_display)
         print(f"{COLOR_INFO}----------------------------------------{COLOR_RESET}") 

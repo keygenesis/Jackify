@@ -198,7 +198,10 @@ class ShortcutHandler:
                 if steam_vdf_spec is None:
                     # Try to install steam-vdf using pip
                     print("Installing required dependency (steam-vdf)...")
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "steam-vdf", "--user"])
+                    # CRITICAL: Use safe Python executable to prevent AppImage recursive spawning
+                    from jackify.backend.handlers.subprocess_utils import get_safe_python_executable
+                    python_exe = get_safe_python_executable()
+                    subprocess.check_call([python_exe, "-m", "pip", "install", "steam-vdf", "--user"])
                     time.sleep(1)  # Give some time for the install to complete
                 
                 # Now import it

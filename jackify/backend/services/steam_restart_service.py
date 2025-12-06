@@ -10,42 +10,82 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+STRATEGY_JACKIFY = "jackify"
+STRATEGY_NAK_SIMPLE = "nak_simple"
+
+
+def _get_restart_strategy() -> str:
+    """Read restart strategy from config with safe fallback."""
+    try:
+        from jackify.backend.handlers.config_handler import ConfigHandler
+
+        strategy = ConfigHandler().get("steam_restart_strategy", STRATEGY_JACKIFY)
+        if strategy not in (STRATEGY_JACKIFY, STRATEGY_NAK_SIMPLE):
+            return STRATEGY_JACKIFY
+        return strategy
+    except Exception as exc:  # pragma: no cover - defensive logging only
+        logger.debug(f"Steam restart: Unable to read strategy from config: {exc}")
+        return STRATEGY_JACKIFY
+
+
+def _strategy_label(strategy: str) -> str:
+    if strategy == STRATEGY_NAK_SIMPLE:
+        return "NaK simple restart"
+    return "Jackify hardened restart"
+
 def _get_clean_subprocess_env():
     """
-    Create a clean environment for subprocess calls by removing PyInstaller-specific
-    environment variables that can interfere with Steam execution.
+    Create a clean environment for subprocess calls by stripping bundle-specific
+    environment variables (e.g., frozen AppImage remnants) that can interfere with Steam.
+    
+    CRITICAL: Preserves all display/session variables that Steam needs for GUI:
+    - DISPLAY, WAYLAND_DISPLAY, XDG_SESSION_TYPE, DBUS_SESSION_BUS_ADDRESS,
+      XDG_RUNTIME_DIR, XAUTHORITY, etc.
     
     Returns:
-        dict: Cleaned environment dictionary
+        dict: Cleaned environment dictionary with GUI variables preserved
     """
     env = os.environ.copy()
-    pyinstaller_vars_removed = []
+    bundle_vars_removed = []
     
-    # Remove PyInstaller-specific environment variables
+    # CRITICAL: Preserve display/session variables that Steam GUI needs
+    # These MUST be kept for Steam to open its GUI window
+    gui_vars_to_preserve = [
+        'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'DBUS_SESSION_BUS_ADDRESS',
+        'XDG_RUNTIME_DIR', 'XAUTHORITY', 'XDG_CURRENT_DESKTOP', 'XDG_SESSION_DESKTOP',
+        'QT_QPA_PLATFORM', 'GDK_BACKEND', 'XDG_DATA_DIRS', 'XDG_CONFIG_DIRS'
+    ]
+    preserved_gui_vars = {}
+    for var in gui_vars_to_preserve:
+        if var in env:
+            preserved_gui_vars[var] = env[var]
+            logger.debug(f"Steam restart: Preserving GUI variable {var}={env[var][:50] if len(str(env[var])) > 50 else env[var]}")
+    
+    # Remove bundle-specific environment variables
     if env.pop('_MEIPASS', None):
-        pyinstaller_vars_removed.append('_MEIPASS')
+        bundle_vars_removed.append('_MEIPASS')
     if env.pop('_MEIPASS2', None):
-        pyinstaller_vars_removed.append('_MEIPASS2')
+        bundle_vars_removed.append('_MEIPASS2')
     
-    # Clean library path variables that PyInstaller modifies (Linux/Unix)
+    # Clean library path variables that frozen bundles modify (Linux/Unix)
     if 'LD_LIBRARY_PATH_ORIG' in env:
-        # Restore original LD_LIBRARY_PATH if it was backed up by PyInstaller
+        # Restore original LD_LIBRARY_PATH if it was backed up by the bundler
         env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
-        pyinstaller_vars_removed.append('LD_LIBRARY_PATH (restored from _ORIG)')
+        bundle_vars_removed.append('LD_LIBRARY_PATH (restored from _ORIG)')
     else:
-        # Remove PyInstaller-modified LD_LIBRARY_PATH
+        # Remove modified LD_LIBRARY_PATH entries
         if env.pop('LD_LIBRARY_PATH', None):
-            pyinstaller_vars_removed.append('LD_LIBRARY_PATH (removed)')
+            bundle_vars_removed.append('LD_LIBRARY_PATH (removed)')
     
-    # Clean PATH of PyInstaller-specific entries
+    # Clean PATH of bundle-specific entries
     if 'PATH' in env and hasattr(sys, '_MEIPASS'):
         path_entries = env['PATH'].split(os.pathsep)
         original_count = len(path_entries)
-        # Remove any PATH entries that point to PyInstaller temp directory
+        # Remove any PATH entries that point to the bundle's temp directory
         cleaned_path = [p for p in path_entries if not p.startswith(sys._MEIPASS)]
         env['PATH'] = os.pathsep.join(cleaned_path)
         if len(cleaned_path) < original_count:
-            pyinstaller_vars_removed.append(f'PATH (removed {original_count - len(cleaned_path)} PyInstaller entries)')
+            bundle_vars_removed.append(f'PATH (removed {original_count - len(cleaned_path)} bundle entries)')
     
     # Clean macOS library path (if present)
     if 'DYLD_LIBRARY_PATH' in env and hasattr(sys, '_MEIPASS'):
@@ -53,16 +93,26 @@ def _get_clean_subprocess_env():
         cleaned_dyld = [p for p in dyld_entries if not p.startswith(sys._MEIPASS)]
         if cleaned_dyld:
             env['DYLD_LIBRARY_PATH'] = os.pathsep.join(cleaned_dyld)
-            pyinstaller_vars_removed.append('DYLD_LIBRARY_PATH (cleaned)')
+            bundle_vars_removed.append('DYLD_LIBRARY_PATH (cleaned)')
         else:
             env.pop('DYLD_LIBRARY_PATH', None)
-            pyinstaller_vars_removed.append('DYLD_LIBRARY_PATH (removed)')
+            bundle_vars_removed.append('DYLD_LIBRARY_PATH (removed)')
+    
+    # Ensure GUI variables are still present (they should be, but double-check)
+    for var, value in preserved_gui_vars.items():
+        if var not in env:
+            env[var] = value
+            logger.warning(f"Steam restart: Restored GUI variable {var} that was accidentally removed")
     
     # Log what was cleaned for debugging
-    if pyinstaller_vars_removed:
-        logger.debug(f"Steam restart: Cleaned PyInstaller environment variables: {', '.join(pyinstaller_vars_removed)}")
+    if bundle_vars_removed:
+        logger.debug(f"Steam restart: Cleaned bundled environment variables: {', '.join(bundle_vars_removed)}")
     else:
-        logger.debug("Steam restart: No PyInstaller environment variables detected (likely DEV mode)")
+        logger.debug("Steam restart: No bundled environment variables detected (likely DEV mode)")
+    
+    # Log preserved GUI variables for debugging
+    if preserved_gui_vars:
+        logger.debug(f"Steam restart: Preserved {len(preserved_gui_vars)} GUI environment variables")
     
     return env
 
@@ -138,22 +188,99 @@ def wait_for_steam_exit(timeout: int = 60, check_interval: float = 0.5) -> bool:
         time.sleep(check_interval)
     return False
 
-def start_steam() -> bool:
-    """Attempt to start Steam using the exact methods from existing working logic."""
-    env = _get_clean_subprocess_env()
+def _start_steam_nak_style(is_steamdeck_flag=False, is_flatpak_flag=False, env_override=None) -> bool:
+    """
+    Start Steam using a simplified NaK-style restart (single command, no env cleanup).
+    
+    CRITICAL: Do NOT use start_new_session - Steam needs to inherit the session
+    to connect to display/tray. Ensure all GUI environment variables are preserved.
+    """
+    env = env_override if env_override is not None else os.environ.copy()
+    
+    # Log critical GUI variables for debugging
+    gui_vars = ['DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR']
+    for var in gui_vars:
+        if var in env:
+            logger.debug(f"NaK-style restart: {var}={env[var][:50] if len(str(env[var])) > 50 else env[var]}")
+        else:
+            logger.warning(f"NaK-style restart: {var} is NOT SET - Steam GUI may fail!")
+    
+    try:
+        if is_steamdeck_flag:
+            logger.info("NaK-style restart: Steam Deck detected, restarting via systemctl.")
+            subprocess.Popen(["systemctl", "--user", "restart", "app-steam@autostart.service"], env=env)
+        elif is_flatpak_flag:
+            logger.info("NaK-style restart: Flatpak Steam detected, running flatpak command.")
+            subprocess.Popen(["flatpak", "run", "com.valvesoftware.Steam"], 
+                           env=env, stderr=subprocess.DEVNULL)
+        else:
+            logger.info("NaK-style restart: launching Steam directly (inheriting session for GUI).")
+            # NaK uses simple "steam" command without -foreground flag
+            # Do NOT use start_new_session - Steam needs session access for GUI
+            # Use shell=True to ensure proper environment inheritance
+            # This helps with GUI display access on some systems
+            subprocess.Popen("steam", shell=True, env=env)
+
+        time.sleep(5)
+        check_result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
+        if check_result.returncode == 0:
+            logger.info("NaK-style restart detected running Steam process.")
+            return True
+
+        logger.warning("NaK-style restart did not detect Steam process after launch.")
+        return False
+    except FileNotFoundError as exc:
+        logger.error(f"NaK-style restart command not found: {exc}")
+        return False
+    except Exception as exc:
+        logger.error(f"NaK-style restart encountered an error: {exc}")
+        return False
+
+
+def start_steam(is_steamdeck_flag=None, is_flatpak_flag=None, env_override=None, strategy: str = STRATEGY_JACKIFY) -> bool:
+    """
+    Attempt to start Steam using the exact methods from existing working logic.
+
+    Args:
+        is_steamdeck_flag: Optional pre-detected Steam Deck status
+        is_flatpak_flag: Optional pre-detected Flatpak Steam status
+        env_override: Optional environment dictionary for subprocess calls
+        strategy: Restart strategy identifier
+    """
+    if strategy == STRATEGY_NAK_SIMPLE:
+        return _start_steam_nak_style(
+            is_steamdeck_flag=is_steamdeck_flag,
+            is_flatpak_flag=is_flatpak_flag,
+            env_override=env_override or os.environ.copy(),
+        )
+
+    env = env_override if env_override is not None else _get_clean_subprocess_env()
+
+    # Use provided flags or detect
+    _is_steam_deck = is_steamdeck_flag if is_steamdeck_flag is not None else is_steam_deck()
+    _is_flatpak = is_flatpak_flag if is_flatpak_flag is not None else is_flatpak_steam()
+    logger.info(
+        "Starting Steam (strategy=%s, steam_deck=%s, flatpak=%s)",
+        strategy,
+        _is_steam_deck,
+        _is_flatpak,
+    )
+
     try:
         # Try systemd user service (Steam Deck) - HIGHEST PRIORITY
-        if is_steam_deck():
+        if _is_steam_deck:
+            logger.debug("Using systemctl restart for Steam Deck.")
             subprocess.Popen(["systemctl", "--user", "restart", "app-steam@autostart.service"], env=env)
             return True
 
         # Check if Flatpak Steam (only if not Steam Deck)
-        if is_flatpak_steam():
+        if _is_flatpak:
             logger.info("Flatpak Steam detected - using flatpak run command")
             try:
-                # Redirect flatpak's stderr to suppress "app not installed" errors on systems without flatpak Steam
-                # Steam's own stdout/stderr will still go through (flatpak forwards them)
-                subprocess.Popen(["flatpak", "run", "com.valvesoftware.Steam", "-silent"], 
+                # Use -foreground to ensure GUI opens (not -silent)
+                # CRITICAL: Do NOT use start_new_session - Steam needs to inherit the session
+                logger.debug("Executing: flatpak run com.valvesoftware.Steam -foreground (inheriting session for GUI)")
+                subprocess.Popen(["flatpak", "run", "com.valvesoftware.Steam", "-foreground"],
                                env=env, stderr=subprocess.DEVNULL)
                 time.sleep(5)
                 check_result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
@@ -161,18 +288,15 @@ def start_steam() -> bool:
                     logger.info("Flatpak Steam process detected after start.")
                     return True
                 else:
-                    logger.warning("Flatpak Steam process not detected after start attempt.")
-                    return False
+                    logger.warning("Flatpak Steam start failed, falling back to normal Steam start methods")
             except Exception as e:
-                logger.error(f"Error starting Flatpak Steam: {e}")
-                return False
+                logger.warning(f"Flatpak Steam start failed ({e}), falling back to normal Steam start methods")
 
-        # Use startup methods with only -silent flag (no -minimized or -no-browser)
-        # Don't redirect stdout/stderr or use start_new_session to allow Steam to connect to display/tray
+        # Use startup methods with -foreground flag to ensure GUI opens
         start_methods = [
-            {"name": "Popen", "cmd": ["steam", "-silent"], "kwargs": {"env": env}},
-            {"name": "setsid", "cmd": ["setsid", "steam", "-silent"], "kwargs": {"env": env}},
-            {"name": "nohup", "cmd": ["nohup", "steam", "-silent"], "kwargs": {"preexec_fn": os.setpgrp, "env": env}}
+            {"name": "Popen", "cmd": ["steam", "-foreground"], "kwargs": {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL, "start_new_session": True, "env": env}},
+            {"name": "setsid", "cmd": ["setsid", "steam", "-foreground"], "kwargs": {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL, "env": env}},
+            {"name": "nohup", "cmd": ["nohup", "steam", "-foreground"], "kwargs": {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL, "start_new_session": True, "preexec_fn": os.setpgrp, "env": env}}
         ]
         
         for method in start_methods:
@@ -201,36 +325,48 @@ def start_steam() -> bool:
         logger.error(f"Error starting Steam: {e}")
         return False
 
-def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = None, timeout: int = 60) -> bool:
+def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = None, timeout: int = 60, system_info=None) -> bool:
     """
     Robustly restart Steam across all distros. Returns True on success, False on failure.
     Optionally accepts a progress_callback(message: str) for UI feedback.
     Uses aggressive pkill approach for maximum reliability.
+
+    Args:
+        progress_callback: Optional callback for progress updates
+        timeout: Timeout in seconds for restart operation
+        system_info: Optional SystemInfo object with pre-detected Steam installation types
     """
-    env = _get_clean_subprocess_env()
-    
+    shutdown_env = _get_clean_subprocess_env()
+    strategy = _get_restart_strategy()
+    start_env = shutdown_env if strategy == STRATEGY_JACKIFY else os.environ.copy()
+
+    # Use cached detection from system_info if available, otherwise detect
+    _is_steam_deck = system_info.is_steamdeck if system_info else is_steam_deck()
+    _is_flatpak = system_info.is_flatpak_steam if system_info else is_flatpak_steam()
+
     def report(msg):
         logger.info(msg)
         if progress_callback:
             progress_callback(msg)
 
     report("Shutting down Steam...")
+    report(f"Steam restart strategy: {_strategy_label(strategy)}")
 
     # Steam Deck: Use systemctl for shutdown (special handling) - HIGHEST PRIORITY
-    if is_steam_deck():
+    if _is_steam_deck:
         try:
             report("Steam Deck detected - using systemctl shutdown...")
             subprocess.run(['systemctl', '--user', 'stop', 'app-steam@autostart.service'],
-                         timeout=15, check=False, capture_output=True, env=env)
+                         timeout=15, check=False, capture_output=True, env=shutdown_env)
             time.sleep(2)
         except Exception as e:
             logger.debug(f"systemctl stop failed on Steam Deck: {e}")
     # Flatpak Steam: Use flatpak kill command (only if not Steam Deck)
-    elif is_flatpak_steam():
+    elif _is_flatpak:
         try:
             report("Flatpak Steam detected - stopping via flatpak...")
             subprocess.run(['flatpak', 'kill', 'com.valvesoftware.Steam'],
-                         timeout=15, check=False, capture_output=True, stderr=subprocess.DEVNULL, env=env)
+                         timeout=15, check=False, capture_output=True, stderr=subprocess.DEVNULL, env=shutdown_env)
             time.sleep(2)
         except Exception as e:
             logger.debug(f"flatpak kill failed: {e}")
@@ -238,21 +374,21 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
     # All systems: Use pkill approach (proven 15/16 test success rate)
     try:
         # Skip unreliable steam -shutdown, go straight to pkill
-        pkill_result = subprocess.run(['pkill', 'steam'], timeout=15, check=False, capture_output=True, env=env)
+        pkill_result = subprocess.run(['pkill', 'steam'], timeout=15, check=False, capture_output=True, env=shutdown_env)
         logger.debug(f"pkill steam result: {pkill_result.returncode}")
         time.sleep(2)
         
         # Check if Steam is still running
-        check_result = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=env)
+        check_result = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=shutdown_env)
         if check_result.returncode == 0:
             # Force kill if still running
             report("Steam still running - force terminating...")
-            force_result = subprocess.run(['pkill', '-9', 'steam'], timeout=15, check=False, capture_output=True, env=env)
+            force_result = subprocess.run(['pkill', '-9', 'steam'], timeout=15, check=False, capture_output=True, env=shutdown_env)
             logger.debug(f"pkill -9 steam result: {force_result.returncode}")
             time.sleep(2)
             
             # Final check
-            final_check = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=env)
+            final_check = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=shutdown_env)
             if final_check.returncode != 0:
                 logger.info("Steam processes successfully force terminated.")
             else:
@@ -269,19 +405,24 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
 
     # Start Steam using platform-specific logic
     report("Starting Steam...")
-    
+
     # Steam Deck: Use systemctl restart (keep existing working approach)
-    if is_steam_deck():
+    if _is_steam_deck:
         try:
-            subprocess.Popen(["systemctl", "--user", "restart", "app-steam@autostart.service"], env=env)
+            subprocess.Popen(["systemctl", "--user", "restart", "app-steam@autostart.service"], env=start_env)
             logger.info("Steam Deck: Initiated systemctl restart")
         except Exception as e:
             logger.error(f"Steam Deck systemctl restart failed: {e}")
             report("Failed to restart Steam on Steam Deck.")
             return False
     else:
-        # All other distros: Use proven steam -silent method
-        if not start_steam():
+        # All other distros: Use start_steam() which now uses -foreground to ensure GUI opens
+        if not start_steam(
+            is_steamdeck_flag=_is_steam_deck,
+            is_flatpak_flag=_is_flatpak,
+            env_override=start_env,
+            strategy=strategy,
+        ):
             report("Failed to start Steam.")
             return False
 
@@ -294,7 +435,7 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
     
     while elapsed_wait < max_startup_wait:
         try:
-            result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
+            result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=start_env)
             if result.returncode == 0:
                 if not initial_wait_done:
                     logger.info("Steam process detected. Waiting additional time for full initialization...")
@@ -302,7 +443,7 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
                 time.sleep(5)
                 elapsed_wait += 5
                 if initial_wait_done and elapsed_wait >= 15:
-                    final_check = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
+                    final_check = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=start_env)
                     if final_check.returncode == 0:
                         report("Steam started successfully.")
                         logger.info("Steam confirmed running after wait.")

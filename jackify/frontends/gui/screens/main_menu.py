@@ -6,6 +6,7 @@ from PySide6.QtGui import QPixmap, QFont
 from PySide6.QtCore import Qt
 import os
 from ..shared_theme import JACKIFY_COLOR_BLUE, LOGO_PATH, DISCLAIMER_TEXT
+from ..utils import set_responsive_minimum
 
 class MainMenu(QWidget):
     def __init__(self, stacked_widget=None, dev_mode=False):
@@ -14,37 +15,52 @@ class MainMenu(QWidget):
         self.dev_mode = dev_mode
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        layout.setContentsMargins(50, 50, 50, 50)
-        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)  # Reduced from 50
+        layout.setSpacing(12)  # Reduced from 20
+
+        # Header zone with fixed height for consistent layout across all menu screens
+        header_widget = QWidget()
+        header_layout = QVBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(2)
 
         # Title
         title = QLabel("<b>Jackify</b>")
-        title.setStyleSheet(f"font-size: 24px; color: {JACKIFY_COLOR_BLUE};")
+        title.setStyleSheet(f"font-size: 20px; color: {JACKIFY_COLOR_BLUE};")
         title.setAlignment(Qt.AlignHCenter)
-        layout.addWidget(title)
+        header_layout.addWidget(title)
 
-        # Description
+        header_layout.addSpacing(10)
+
+        # Description area with fixed height
         desc = QLabel(
             "Manage your modlists with native Linux tools. "
             "Choose from the options below to install, "
             "configure, or manage modlists."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #ccc;")
+        desc.setStyleSheet("color: #ccc; font-size: 13px;")
         desc.setAlignment(Qt.AlignHCenter)
-        layout.addWidget(desc)
+        desc.setMaximumHeight(50)  # Fixed height for description zone
+        header_layout.addWidget(desc)
+
+        header_layout.addSpacing(12)
 
         # Separator
-        layout.addSpacing(16)
         sep = QLabel()
         sep.setFixedHeight(2)
         sep.setStyleSheet("background: #fff;")
-        layout.addWidget(sep)
-        layout.addSpacing(16)
+        header_layout.addWidget(sep)
+
+        header_layout.addSpacing(10)
+
+        header_widget.setLayout(header_layout)
+        header_widget.setFixedHeight(120)  # Fixed total header height
+        layout.addWidget(header_widget)
 
         # Menu buttons
         button_width = 400
-        button_height = 60
+        button_height = 40  # Reduced from 50/60
         MENU_ITEMS = [
             ("Modlist Tasks", "modlist_tasks", "Manage your modlists with native Linux tools"),
             ("Additional Tasks", "additional_tasks", "Additional Tasks & Tools, such as TTW Installation"),
@@ -54,14 +70,14 @@ class MainMenu(QWidget):
         for label, action_id, description in MENU_ITEMS:
             # Main button
             btn = QPushButton(label)
-            btn.setFixedSize(button_width, 50)
+            btn.setFixedSize(button_width, button_height)  # Use variable height
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: #4a5568;
                     color: white;
                     border: none;
-                    border-radius: 8px;
-                    font-size: 14px;
+                    border-radius: 6px;
+                    font-size: 13px;
                     font-weight: bold;
                     text-align: center;
                 }}
@@ -73,28 +89,28 @@ class MainMenu(QWidget):
                 }}
             """)
             btn.clicked.connect(lambda checked, a=action_id: self.menu_action(a))
-            
+
             # Button container with proper alignment
             btn_container = QWidget()
             btn_layout = QVBoxLayout()
             btn_layout.setContentsMargins(0, 0, 0, 0)
-            btn_layout.setSpacing(4)
+            btn_layout.setSpacing(3)  # Reduced from 4
             btn_layout.setAlignment(Qt.AlignHCenter)
             btn_layout.addWidget(btn)
-            
+
             # Description label with proper alignment
             desc_label = QLabel(description)
             desc_label.setAlignment(Qt.AlignHCenter)
-            desc_label.setStyleSheet("color: #999; font-size: 12px;")
+            desc_label.setStyleSheet("color: #999; font-size: 11px;")  # Reduced from 12px
             desc_label.setWordWrap(True)
-            desc_label.setFixedWidth(button_width)  # Match button width for proper alignment
+            desc_label.setFixedWidth(button_width)
             btn_layout.addWidget(desc_label)
-            
+
             btn_container.setLayout(btn_layout)
             layout.addWidget(btn_container)
 
         # Disclaimer
-        layout.addSpacing(20)
+        layout.addSpacing(12)  # Reduced from 20
         disclaimer = QLabel(DISCLAIMER_TEXT)
         disclaimer.setWordWrap(True)
         disclaimer.setAlignment(Qt.AlignCenter)
@@ -103,6 +119,20 @@ class MainMenu(QWidget):
         layout.addWidget(disclaimer, alignment=Qt.AlignHCenter)
 
         self.setLayout(layout)
+
+    def showEvent(self, event):
+        """Called when the widget becomes visible - ensure minimum size only"""
+        super().showEvent(event)
+        try:
+            main_window = self.window()
+            if main_window:
+                from PySide6.QtCore import QSize
+                # Only set minimum size - DO NOT RESIZE
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                set_responsive_minimum(main_window, min_width=960, min_height=420)
+                # DO NOT resize - let window stay at current size
+        except Exception:
+            pass
 
     def menu_action(self, action_id):
         if action_id == "exit_jackify":

@@ -5,12 +5,13 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QHBoxLayo
 from PySide6.QtCore import Qt, QSize, QThread, Signal, QTimer, QProcess, QMetaObject, QUrl
 from PySide6.QtGui import QPixmap, QTextCursor, QColor, QPainter, QFont
 from ..shared_theme import JACKIFY_COLOR_BLUE, DEBUG_BORDERS
-from ..utils import ansi_to_html
+from ..utils import ansi_to_html, set_responsive_minimum
 from ..widgets.unsupported_game_dialog import UnsupportedGameDialog
 import os
 import subprocess
 import sys
 import threading
+from typing import Optional
 from jackify.backend.handlers.shortcut_handler import ShortcutHandler
 from jackify.backend.handlers.wabbajack_parser import WabbajackParser
 import traceback
@@ -24,6 +25,14 @@ from ..dialogs import SuccessDialog
 from jackify.backend.handlers.validation_handler import ValidationHandler
 from jackify.frontends.gui.dialogs.warning_dialog import WarningDialog
 from jackify.frontends.gui.services.message_service import MessageService
+from jackify.backend.utils.nexus_premium_detector import is_non_premium_indicator
+# R&D: Progress reporting components
+from jackify.backend.handlers.progress_parser import ProgressStateManager
+from jackify.frontends.gui.widgets.progress_indicator import OverallProgressIndicator
+from jackify.frontends.gui.widgets.file_progress_list import FileProgressList
+from jackify.shared.progress_models import InstallationPhase, InstallationProgress
+# Modlist gallery (imported at module level to avoid import delay when opening dialog)
+from jackify.frontends.gui.screens.modlist_gallery import ModlistGalleryDialog
 
 def debug_print(message):
     """Print debug message only if debug mode is enabled"""
@@ -347,11 +356,17 @@ class SelectionDialog(QDialog):
 
 class InstallModlistScreen(QWidget):
     steam_restart_finished = Signal(bool, str)
+    resize_request = Signal(str)  # Signal for expand/collapse like TTW screen
     def __init__(self, stacked_widget=None, main_menu_index=0):
         super().__init__()
+        # Set size policy to prevent unnecessary expansion - let content determine size
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.stacked_widget = stacked_widget
         self.main_menu_index = main_menu_index
         self.debug = DEBUG_BORDERS
+        # Remember original main window geometry/min-size to restore on expand (like TTW screen)
+        self._saved_geometry = None
+        self._saved_min_size = None
         self.online_modlists = {}  # {game_type: [modlist_dict, ...]}
         self.modlist_details = {}  # {modlist_name: modlist_dict}
 
@@ -360,10 +375,12 @@ class InstallModlistScreen(QWidget):
 
         # Initialize services early
         from jackify.backend.services.api_key_service import APIKeyService
+        from jackify.backend.services.nexus_auth_service import NexusAuthService
         from jackify.backend.services.resolution_service import ResolutionService
         from jackify.backend.services.protontricks_detection_service import ProtontricksDetectionService
         from jackify.backend.handlers.config_handler import ConfigHandler
         self.api_key_service = APIKeyService()
+        self.auth_service = NexusAuthService()
         self.resolution_service = ResolutionService()
         self.config_handler = ConfigHandler()
         self.protontricks_service = ProtontricksDetectionService()
@@ -372,16 +389,46 @@ class InstallModlistScreen(QWidget):
         self._show_somnium_guidance = False
         self._somnium_install_dir = None
 
+        # Console deduplication tracking
+        self._last_console_line = None
+        
+        # Gallery cache preloading tracking
+        self._gallery_cache_preload_started = False
+        self._gallery_cache_preload_thread = None
+
         # Scroll tracking for professional auto-scroll behavior
         self._user_manually_scrolled = False
         self._was_at_bottom = True
         
         # Initialize Wabbajack parser for game detection
         self.wabbajack_parser = WabbajackParser()
+        
+        # R&D: Initialize progress reporting components
+        self.progress_state_manager = ProgressStateManager()
+        self.progress_indicator = OverallProgressIndicator(show_progress_bar=True)
+        self.file_progress_list = FileProgressList()  # Shows all active files (scrolls if needed)
+        self._premium_notice_shown = False
+        self._premium_failure_active = False
+        self._post_install_sequence = self._build_post_install_sequence()
+        self._post_install_total_steps = len(self._post_install_sequence)
+        self._post_install_current_step = 0
+        self._post_install_active = False
+        self._post_install_last_label = ""
+        self._bsa_hold_deadline = 0.0
+
+        # No throttling needed - render loop handles smooth updates at 60fps
+
+        # R&D: Create "Show Details" checkbox (reuse TTW pattern)
+        self.show_details_checkbox = QCheckBox("Show details")
+        self.show_details_checkbox.setChecked(False)  # Start collapsed
+        self.show_details_checkbox.setToolTip("Toggle between activity summary and detailed console output")
+        self.show_details_checkbox.toggled.connect(self._on_show_details_toggled)
 
         main_overall_vbox = QVBoxLayout(self)
+        self.main_overall_vbox = main_overall_vbox  # Store reference for expand/collapse
         main_overall_vbox.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
         main_overall_vbox.setContentsMargins(50, 50, 50, 0)  # No bottom margin
+        main_overall_vbox.setSpacing(0)  # No spacing between widgets to eliminate gaps
         if self.debug:
             self.setStyleSheet("border: 2px solid magenta;")
 
@@ -416,13 +463,18 @@ class InstallModlistScreen(QWidget):
         upper_hbox = QHBoxLayout()
         upper_hbox.setContentsMargins(0, 0, 0, 0)
         upper_hbox.setSpacing(16)
+        upper_hbox.setAlignment(Qt.AlignTop)  # Align both sides at the top
         # Left: user-configurables (form and controls)
         user_config_vbox = QVBoxLayout()
         user_config_vbox.setAlignment(Qt.AlignTop)
         user_config_vbox.setSpacing(4)  # Reduce spacing between major form sections
+        user_config_vbox.setContentsMargins(0, 0, 0, 0)  # No margins to ensure tab alignment
         # --- Tabs for source selection ---
         self.source_tabs = QTabWidget()
-        self.source_tabs.setStyleSheet("QTabWidget::pane { background: #222; border: 1px solid #444; } QTabBar::tab { background: #222; color: #ccc; padding: 6px 16px; } QTabBar::tab:selected { background: #333; color: #3fd0ea; }")
+        self.source_tabs.setStyleSheet("QTabWidget::pane { background: #222; border: 1px solid #444; } QTabBar::tab { background: #222; color: #ccc; padding: 6px 16px; } QTabBar::tab:selected { background: #333; color: #3fd0ea; } QTabWidget { margin: 0px; padding: 0px; } QTabBar { margin: 0px; padding: 0px; }")
+        self.source_tabs.setContentsMargins(0, 0, 0, 0)  # Ensure no margins for alignment
+        self.source_tabs.setDocumentMode(False)  # Keep frame for consistency
+        self.source_tabs.setTabPosition(QTabWidget.North)  # Ensure tabs are at top
         if self.debug:
             self.source_tabs.setStyleSheet("border: 2px solid cyan;")
             self.source_tabs.setToolTip("SOURCE_TABS")
@@ -505,56 +557,33 @@ class InstallModlistScreen(QWidget):
         downloads_dir_hbox.addWidget(self.browse_downloads_btn)
         form_grid.addWidget(downloads_dir_label, 2, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         form_grid.addLayout(downloads_dir_hbox, 2, 1)
-        # Nexus API Key
-        api_key_label = QLabel("Nexus API Key:")
-        self.api_key_edit = QLineEdit()
-        self.api_key_edit.setMaximumHeight(25)  # Force compact height
-        # Services already initialized above
-        # Set up obfuscation timer and state
-        self.api_key_obfuscation_timer = QTimer(self)
-        self.api_key_obfuscation_timer.setSingleShot(True)
-        self.api_key_obfuscation_timer.timeout.connect(self._obfuscate_api_key)
-        self.api_key_original_text = ""
-        self.api_key_is_obfuscated = False
-        # Connect events for obfuscation
-        self.api_key_edit.textChanged.connect(self._on_api_key_text_changed)
-        self.api_key_edit.focusInEvent = self._on_api_key_focus_in
-        self.api_key_edit.focusOutEvent = self._on_api_key_focus_out
-        # Load saved API key if available
-        saved_key = self.api_key_service.get_saved_api_key()
-        if saved_key:
-            self.api_key_original_text = saved_key  # Set original text first
-            self.api_key_edit.setText(saved_key)
-            self._obfuscate_api_key()  # Immediately obfuscate saved keys
-        form_grid.addWidget(api_key_label, 3, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-        form_grid.addWidget(self.api_key_edit, 3, 1)
-        # API Key save checkbox and info (row 4)
-        api_save_layout = QHBoxLayout()
-        api_save_layout.setContentsMargins(0, 0, 0, 0)
-        api_save_layout.setSpacing(8)
-        self.save_api_key_checkbox = QCheckBox("Save API Key")
-        self.save_api_key_checkbox.setChecked(self.api_key_service.has_saved_api_key())
-        self.save_api_key_checkbox.toggled.connect(self._on_api_key_save_toggled)
-        api_save_layout.addWidget(self.save_api_key_checkbox, alignment=Qt.AlignTop)
-        
-        # Validate button removed - validation now happens silently on save checkbox toggle
-        api_info = QLabel(
-            '<small>Storing your API Key locally is done so at your own risk.<br>'
-            'You can get your API key at: <a href="https://www.nexusmods.com/users/myaccount?tab=api">'
-            'https://www.nexusmods.com/users/myaccount?tab=api</a></small>'
-        )
-        api_info.setOpenExternalLinks(False)
-        api_info.linkActivated.connect(self._open_url_safe)
-        api_info.setWordWrap(True)
-        api_info.setAlignment(Qt.AlignLeft)
-        api_save_layout.addWidget(api_info, stretch=1)
-        api_save_widget = QWidget()
-        api_save_widget.setLayout(api_save_layout)
-        # Remove height constraint to prevent text truncation
-        if self.debug:
-            api_save_widget.setStyleSheet("border: 2px solid blue;")
-            api_save_widget.setToolTip("API_KEY_SECTION")
-        form_grid.addWidget(api_save_widget, 4, 1)
+
+        # Nexus Login (OAuth)
+        nexus_login_label = QLabel("Nexus Login:")
+        self.nexus_status = QLabel("Checking...")
+        self.nexus_status.setStyleSheet("color: #ccc;")
+        self.nexus_login_btn = QPushButton("Authorise")
+        self.nexus_login_btn.setStyleSheet("""
+            QPushButton:hover { opacity: 0.95; }
+            QPushButton:disabled { opacity: 0.6; }
+        """)
+        self.nexus_login_btn.setMaximumWidth(90)
+        self.nexus_login_btn.setVisible(False)
+        self.nexus_login_btn.clicked.connect(self._handle_nexus_login_click)
+
+        nexus_hbox = QHBoxLayout()
+        nexus_hbox.setContentsMargins(0, 0, 0, 0)
+        nexus_hbox.setSpacing(8)
+        nexus_hbox.addWidget(self.nexus_login_btn)
+        nexus_hbox.addWidget(self.nexus_status)
+        nexus_hbox.addStretch()
+
+        form_grid.addWidget(nexus_login_label, 3, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        form_grid.addLayout(nexus_hbox, 3, 1)
+
+        # Update nexus status on init
+        self._update_nexus_status()
+
         # --- Resolution Dropdown ---
         resolution_label = QLabel("Resolution:")
         self.resolution_combo = QComboBox()
@@ -626,10 +655,10 @@ class InstallModlistScreen(QWidget):
         
         form_grid.addLayout(resolution_and_restart_layout, 5, 1)
         form_section_widget = QWidget()
-        form_section_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         form_section_widget.setLayout(form_grid)
-        form_section_widget.setMinimumHeight(220)  # Increased to allow RED API key box proper height
-        form_section_widget.setMaximumHeight(240)  # Increased to allow RED API key box proper height
+        # Let form section size naturally to its content
+        # Don't force a fixed height - let it calculate based on grid content
+        form_section_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         if self.debug:
             form_section_widget.setStyleSheet("border: 2px solid blue;")
             form_section_widget.setToolTip("FORM_SECTION")
@@ -661,12 +690,14 @@ class InstallModlistScreen(QWidget):
             btn_row_widget.setStyleSheet("border: 2px solid red;")
             btn_row_widget.setToolTip("BUTTON_ROW")
         user_config_widget = QWidget()
+        self.user_config_widget = user_config_widget  # Store reference for height calculation
         user_config_widget.setLayout(user_config_vbox)
-        user_config_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)  # Allow vertical expansion to fill space
+        user_config_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)  # Fixed height - don't expand unnecessarily
         if self.debug:
             user_config_widget.setStyleSheet("border: 2px solid orange;")
             user_config_widget.setToolTip("USER_CONFIG_WIDGET")
-        # Right: process monitor (as before)
+        # Right: Tabbed interface with Activity and Process Monitor
+        # Both tabs are always available, user can switch between them
         self.process_monitor = QTextEdit()
         self.process_monitor.setReadOnly(True)
         self.process_monitor.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
@@ -682,26 +713,84 @@ class InstallModlistScreen(QWidget):
         process_vbox.addWidget(self.process_monitor)
         process_monitor_widget = QWidget()
         process_monitor_widget.setLayout(process_vbox)
+        # Match size policy - Process Monitor should expand to fill available space
+        process_monitor_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         if self.debug:
             process_monitor_widget.setStyleSheet("border: 2px solid purple;")
             process_monitor_widget.setToolTip("PROCESS_MONITOR")
-        upper_hbox.addWidget(user_config_widget, stretch=1)
-        upper_hbox.addWidget(process_monitor_widget, stretch=3)
-        upper_hbox.setAlignment(Qt.AlignTop)
+        # Store reference
+        self.process_monitor_widget = process_monitor_widget
+        
+        # Set up File Progress List (Activity tab)
+        # Match Process Monitor size policy exactly - expand to fill available space
+        self.file_progress_list.setMinimumSize(QSize(300, 20))
+        self.file_progress_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        # Create tab widget to hold both Activity and Process Monitor
+        # Match styling of source_tabs on the left for consistency
+        self.activity_tabs = QTabWidget()
+        self.activity_tabs.setStyleSheet("QTabWidget::pane { background: #222; border: 1px solid #444; } QTabBar::tab { background: #222; color: #ccc; padding: 6px 16px; } QTabBar::tab:selected { background: #333; color: #3fd0ea; } QTabWidget { margin: 0px; padding: 0px; } QTabBar { margin: 0px; padding: 0px; }")
+        self.activity_tabs.setContentsMargins(0, 0, 0, 0)  # Ensure no margins for alignment
+        self.activity_tabs.setDocumentMode(False)  # Match left tabs
+        self.activity_tabs.setTabPosition(QTabWidget.North)  # Ensure tabs are at top
+        if self.debug:
+            self.activity_tabs.setStyleSheet("border: 2px solid cyan;")
+            self.activity_tabs.setToolTip("ACTIVITY_TABS")
+        
+        # Add both widgets as tabs
+        self.activity_tabs.addTab(self.file_progress_list, "Activity")
+        self.activity_tabs.addTab(process_monitor_widget, "Process Monitor")
+        
+        upper_hbox.addWidget(user_config_widget, stretch=1, alignment=Qt.AlignTop)
+        # Add tab widget with stretch=3 to match original Process Monitor stretch
+        upper_hbox.addWidget(self.activity_tabs, stretch=3, alignment=Qt.AlignTop)
         upper_section_widget = QWidget()
+        self.upper_section_widget = upper_section_widget  # Store reference for showEvent
         upper_section_widget.setLayout(upper_hbox)
-        upper_section_widget.setMaximumHeight(320)  # Increased to ensure resolution dropdown is visible
+        # Use Fixed size policy - the height should be based on LEFT side only
+        # This ensures consistent height whether Active Files or Process Monitor is shown
+        upper_section_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # Calculate height based on LEFT side (user_config_widget) only
+        # This ensures the same height regardless of which right widget is visible
+        self._upper_section_fixed_height = None  # Will be set in showEvent based on left side
         if self.debug:
             upper_section_widget.setStyleSheet("border: 2px solid green;")
             upper_section_widget.setToolTip("UPPER_SECTION")
         main_overall_vbox.addWidget(upper_section_widget)
+        
+        # Add spacing between upper section and progress banner
+        main_overall_vbox.addSpacing(8)
+        
+        # R&D: Progress indicator banner row (similar to TTW screen)
+        banner_row = QHBoxLayout()
+        banner_row.setContentsMargins(0, 0, 0, 0)
+        banner_row.setSpacing(8)
+        banner_row.addWidget(self.progress_indicator, 1)
+        banner_row.addStretch()
+        banner_row.addWidget(self.show_details_checkbox)
+        banner_row_widget = QWidget()
+        banner_row_widget.setLayout(banner_row)
+        # Constrain height to prevent unwanted vertical expansion
+        banner_row_widget.setMaximumHeight(45)  # Compact height: 34px label + small margin
+        banner_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        main_overall_vbox.addWidget(banner_row_widget)
+        
+        # Add spacing between progress banner and console/details area
+        main_overall_vbox.addSpacing(8)
+        
+        # R&D: File progress list is now in the upper section (replacing Process Monitor)
+        # Console shows below when "Show details" is checked
+        # NOTE: File progress list is already added to upper_hbox above
+        
         # Remove spacing - console should expand to fill available space
         # --- Console output area (full width, placeholder for now) ---
         self.console = QTextEdit()
         self.console.setReadOnly(True)
         self.console.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        self.console.setMinimumHeight(50)   # Very small minimum - can shrink to almost nothing
-        self.console.setMaximumHeight(1000) # Allow growth when space available
+        # R&D: Console starts hidden (only shows when "Show details" is checked)
+        self.console.setMinimumHeight(0)
+        self.console.setMaximumHeight(0)
+        self.console.setVisible(False)
         self.console.setFontFamily('monospace')
         if self.debug:
             self.console.setStyleSheet("border: 2px solid yellow;")
@@ -714,16 +803,25 @@ class InstallModlistScreen(QWidget):
         console_and_buttons_widget = QWidget()
         console_and_buttons_layout = QVBoxLayout()
         console_and_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        console_and_buttons_layout.setSpacing(8)  # Small gap between console and buttons
+        console_and_buttons_layout.setSpacing(0)  # No spacing - console is hidden initially
         
-        console_and_buttons_layout.addWidget(self.console, stretch=1)  # Console fills most space
+        # Console with stretch only when visible, buttons always at natural size
+        console_and_buttons_layout.addWidget(self.console)  # No stretch initially - will be set dynamically
         console_and_buttons_layout.addWidget(btn_row_widget)  # Buttons at bottom of this container
         
         console_and_buttons_widget.setLayout(console_and_buttons_layout)
+        self.console_and_buttons_widget = console_and_buttons_widget  # Store reference for stretch control
+        self.console_and_buttons_layout = console_and_buttons_layout  # Store reference for spacing control
+        # Use Minimum size policy - takes only the minimum space needed
+        console_and_buttons_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        # Constrain height to button row only when console is hidden - match button row height exactly
+        # Button row is 50px max, so container should be exactly that when collapsed
+        console_and_buttons_widget.setFixedHeight(50)  # Lock to exact button row height when console is hidden
         if self.debug:
             console_and_buttons_widget.setStyleSheet("border: 2px solid lightblue;")
             console_and_buttons_widget.setToolTip("CONSOLE_AND_BUTTONS_CONTAINER")
-        main_overall_vbox.addWidget(console_and_buttons_widget, stretch=1)  # This container fills remaining space
+        # Add without stretch - let it size naturally to content
+        main_overall_vbox.addWidget(console_and_buttons_widget)
         self.setLayout(main_overall_vbox)
 
         self.current_modlists = []
@@ -765,7 +863,6 @@ class InstallModlistScreen(QWidget):
             self.modlist_name_edit,
             self.install_dir_edit,
             self.downloads_dir_edit,
-            self.api_key_edit,
             self.file_edit,
             # Browse buttons
             self.browse_install_btn,
@@ -773,8 +870,9 @@ class InstallModlistScreen(QWidget):
             self.file_btn,
             # Resolution controls
             self.resolution_combo,
+            # Nexus login button
+            self.nexus_login_btn,
             # Checkboxes
-            self.save_api_key_checkbox,
             self.auto_restart_checkbox,
         ]
 
@@ -790,6 +888,20 @@ class InstallModlistScreen(QWidget):
             if control:
                 control.setEnabled(True)
 
+    def _abort_install_validation(self):
+        """Reset UI state when validation is aborted early."""
+        self._enable_controls_after_operation()
+        self.cancel_btn.setVisible(True)
+        self.cancel_install_btn.setVisible(False)
+        self.progress_indicator.reset()
+        self.process_monitor.clear()
+
+    def _abort_with_message(self, level: str, title: str, message: str, **kwargs):
+        """Show a message and abort the validation workflow."""
+        messenger = getattr(MessageService, level, MessageService.warning)
+        messenger(self, title, message, **kwargs)
+        self._abort_install_validation()
+
     def refresh_paths(self):
         """Refresh cached paths when config changes."""
         from jackify.shared.paths import get_jackify_logs_dir
@@ -797,7 +909,7 @@ class InstallModlistScreen(QWidget):
         os.makedirs(os.path.dirname(self.modlist_log_path), exist_ok=True)
 
     def _open_url_safe(self, url):
-        """Safely open URL using subprocess to avoid Qt library conflicts in PyInstaller"""
+        """Safely open URL via subprocess to avoid Qt library clashes inside the AppImage runtime"""
         import subprocess
         try:
             subprocess.Popen(['xdg-open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -817,23 +929,159 @@ class InstallModlistScreen(QWidget):
         self.console.setMinimumHeight(50)  # Keep minimum height for usability
 
     def showEvent(self, event):
-        """Called when the widget becomes visible - always reload saved API key"""
+        """Called when the widget becomes visible - ensure collapsed state"""
         super().showEvent(event)
-        # Always reload saved API key to pick up changes from Settings dialog
-        saved_key = self.api_key_service.get_saved_api_key()
-        if saved_key:
-            self.api_key_original_text = saved_key
-            self.api_key_edit.setText(saved_key)
-            self.api_key_is_obfuscated = False  # Start unobfuscated
-            # Set checkbox state
-            self.save_api_key_checkbox.setChecked(True)
-            # Immediately obfuscate saved keys (don't wait 3 seconds)
-            self._obfuscate_api_key()
-        elif not self.api_key_edit.text().strip():
-            # Only clear if no saved key and field is empty
-            self.api_key_original_text = ""
-            self.save_api_key_checkbox.setChecked(False)
+
+        # Refresh Nexus auth status when screen becomes visible
+        # This ensures auth status is updated after user completes OAuth from Settings menu
+        self._update_nexus_status()
+
         # Do NOT load saved parent directories
+
+        # Note: Gallery cache preload now happens at app startup (see JackifyMainWindow.__init__)
+        # This ensures cache is ready before user even navigates to this screen
+
+        # Ensure initial collapsed layout each time this screen is opened (like TTW screen)
+        try:
+            from PySide6.QtCore import Qt as _Qt
+            # Ensure checkbox is unchecked without emitting signals
+            if self.show_details_checkbox.isChecked():
+                self.show_details_checkbox.blockSignals(True)
+                self.show_details_checkbox.setChecked(False)
+                self.show_details_checkbox.blockSignals(False)
+            
+            # Force collapsed state
+            self._toggle_console_visibility(_Qt.Unchecked)
+            # Force the window to compact height
+            main_window = self.window()
+            if main_window:
+                # Save original geometry once
+                if self._saved_geometry is None:
+                    self._saved_geometry = main_window.geometry()
+                if self._saved_min_size is None:
+                    self._saved_min_size = main_window.minimumSize()
+                # Use Qt's standard approach: let layout size naturally, only set minimum
+                # This allows manual resizing and prevents content cut-off
+                from PySide6.QtCore import QTimer, QSize
+                from PySide6.QtWidgets import QApplication
+                
+                def calculate_and_set_upper_section_height():
+                    """Calculate and lock the upper section height based on left side only"""
+                    try:
+                        if hasattr(self, 'upper_section_widget') and self.upper_section_widget is not None:
+                            # Only calculate if we haven't stored it yet
+                            if not hasattr(self, '_upper_section_fixed_height') or self._upper_section_fixed_height is None:
+                                # Calculate height based on LEFT side (user_config_widget) only
+                                if hasattr(self, 'user_config_widget') and self.user_config_widget is not None:
+                                    # Force layout updates to ensure everything is calculated
+                                    self.user_config_widget.updateGeometry()
+                                    self.user_config_widget.layout().update()
+                                    self.updateGeometry()
+                                    self.layout().update()
+                                    QApplication.processEvents()
+                                    # Get the natural height of the left side
+                                    left_height = self.user_config_widget.sizeHint().height()
+                                    # Add a small margin for spacing
+                                    self._upper_section_fixed_height = left_height + 20
+                                else:
+                                    # Fallback: use sizeHint of upper section
+                                    self.upper_section_widget.updateGeometry()
+                                    self._upper_section_fixed_height = self.upper_section_widget.sizeHint().height()
+                            # Lock the height - same in both modes
+                            self.upper_section_widget.setMaximumHeight(self._upper_section_fixed_height)
+                            self.upper_section_widget.setMinimumHeight(self._upper_section_fixed_height)
+                    except Exception as e:
+                        if self.debug:
+                            print(f"DEBUG: Error calculating upper section height: {e}")
+                        pass
+                
+                # Calculate heights immediately after forcing layout update
+                # This prevents visible layout shift
+                self.updateGeometry()
+                self.layout().update()
+                QApplication.processEvents()
+                
+                # Calculate upper section height immediately
+                calculate_and_set_upper_section_height()
+
+                # Only set minimum size - DO NOT RESIZE
+                from PySide6.QtCore import QSize
+                # On Steam Deck, keep fullscreen; on other systems, set normal window state
+                if not (hasattr(main_window, 'system_info') and main_window.system_info.is_steamdeck):
+                    main_window.showNormal()
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                set_responsive_minimum(main_window, min_width=960, min_height=420)
+                # DO NOT resize - let window stay at current size
+        except Exception as e:
+            debug_print(f"DEBUG: showEvent exception: {e}")
+    
+    def _start_gallery_cache_preload(self):
+        """DEPRECATED: Gallery cache preload now happens at app startup in JackifyMainWindow"""
+        # Only start once per session
+        if self._gallery_cache_preload_started:
+            return
+
+        self._gallery_cache_preload_started = True
+        
+        # Create background thread to preload gallery cache
+        class GalleryCachePreloadThread(QThread):
+            finished_signal = Signal(bool, str)  # success, message
+            
+            def run(self):
+                try:
+                    from jackify.backend.services.modlist_gallery_service import ModlistGalleryService
+                    service = ModlistGalleryService()
+                    
+                    # Fetch with search index to build cache (this will take time but is invisible)
+                    # Use force_refresh=False to allow using existing cache if it has mods
+                    metadata = service.fetch_modlist_metadata(
+                        include_validation=False,  # Skip validation for speed
+                        include_search_index=True,  # Include mods for search
+                        sort_by="title",
+                        force_refresh=False  # Use cache if it has mods, otherwise fetch fresh
+                    )
+                    
+                    if metadata:
+                        # Check if we got mods
+                        modlists_with_mods = sum(1 for m in metadata.modlists if hasattr(m, 'mods') and m.mods)
+                        if modlists_with_mods > 0:
+                            debug_print(f"DEBUG: Gallery cache ready ({modlists_with_mods} modlists with mods)")
+                        else:
+                            # Cache didn't have mods, but we fetched fresh - should have mods now
+                            debug_print("DEBUG: Gallery cache updated")
+                    else:
+                        debug_print("DEBUG: Failed to load gallery cache")
+                        
+                except Exception as e:
+                    debug_print(f"DEBUG: Gallery cache preload error: {str(e)}")
+        
+        # Start thread (non-blocking, invisible to user)
+        self._gallery_cache_preload_thread = GalleryCachePreloadThread()
+        # Don't connect finished signal - we don't need to do anything, just let it run
+        self._gallery_cache_preload_thread.start()
+        
+        debug_print("DEBUG: Started background gallery cache preload")
+
+    def hideEvent(self, event):
+        """Called when the widget is hidden - restore window size constraints"""
+        super().hideEvent(event)
+        try:
+            # Check if we're on Steam Deck - if so, clear constraints to prevent affecting other screens
+            main_window = self.window()
+            is_steamdeck = False
+            if hasattr(main_window, 'system_info') and main_window.system_info:
+                is_steamdeck = getattr(main_window.system_info, 'is_steamdeck', False)
+            
+            if main_window:
+                from PySide6.QtCore import QSize
+                # Clear any size constraints that might have been set to prevent affecting other screens
+                # This is especially important for Steam Deck but also helps on desktop
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                main_window.setMinimumSize(QSize(0, 0))
+                debug_print("DEBUG: Install Modlist hideEvent - cleared window size constraints")
+        except Exception as e:
+            debug_print(f"DEBUG: hideEvent exception: {e}")
+            pass
 
     def _load_saved_parent_directories(self):
         """No-op: do not pre-populate install/download directories from saved values."""
@@ -866,62 +1114,267 @@ class InstallModlistScreen(QWidget):
         """Removed automatic saving - user should set defaults in settings"""
         pass
 
-    def _on_api_key_text_changed(self, text):
-        """Handle API key text changes for obfuscation timing"""
-        if not self.api_key_is_obfuscated:
-            self.api_key_original_text = text
-            # Restart the obfuscation timer (3 seconds after last change)
-            self.api_key_obfuscation_timer.stop()
-            if text.strip():  # Only start timer if there's actual text
-                self.api_key_obfuscation_timer.start(3000)  # 3 seconds
-        else:
-            # If currently obfuscated and user is typing/pasting, un-obfuscate
-            if text != self.api_key_service.get_api_key_display(self.api_key_original_text):
-                self.api_key_is_obfuscated = False
-                self.api_key_original_text = text
-                if text.strip():
-                    self.api_key_obfuscation_timer.start(3000)
-    
-    def _on_api_key_focus_in(self, event):
-        """Handle API key field gaining focus - de-obfuscate if needed"""
-        # Call the original focusInEvent first
-        QLineEdit.focusInEvent(self.api_key_edit, event)
-        if self.api_key_is_obfuscated:
-            self.api_key_edit.blockSignals(True)
-            self.api_key_edit.setText(self.api_key_original_text)
-            self.api_key_is_obfuscated = False
-            self.api_key_edit.blockSignals(False)
-        self.api_key_obfuscation_timer.stop()
+    def _update_nexus_status(self):
+        """Update the Nexus login status display"""
+        authenticated, method, username = self.auth_service.get_auth_status()
 
-    def _on_api_key_focus_out(self, event):
-        """Handle API key field losing focus - immediately obfuscate"""
-        QLineEdit.focusOutEvent(self.api_key_edit, event)
-        self._obfuscate_api_key()
-
-    def _obfuscate_api_key(self):
-        """Obfuscate the API key text field"""
-        if not self.api_key_is_obfuscated and self.api_key_original_text.strip():
-            # Block signals to prevent recursion
-            self.api_key_edit.blockSignals(True)
-            # Show masked version
-            masked_text = self.api_key_service.get_api_key_display(self.api_key_original_text)
-            self.api_key_edit.setText(masked_text)
-            self.api_key_is_obfuscated = True
-            # Re-enable signals
-            self.api_key_edit.blockSignals(False)
-    
-    def _get_actual_api_key(self):
-        """Get the actual API key value (not the obfuscated version)"""
-        if self.api_key_is_obfuscated:
-            return self.api_key_original_text
+        if authenticated and method == 'oauth':
+            # OAuth authorised
+            status_text = "Authorised"
+            if username:
+                status_text += f" ({username})"
+            self.nexus_status.setText(status_text)
+            self.nexus_status.setStyleSheet("color: #3fd0ea;")
+            self.nexus_login_btn.setText("Revoke")
+            self.nexus_login_btn.setVisible(True)
+        elif authenticated and method == 'api_key':
+            # API Key in use (fallback - configured in Settings)
+            self.nexus_status.setText("API Key")
+            self.nexus_status.setStyleSheet("color: #FFA726;")
+            self.nexus_login_btn.setText("Authorise")
+            self.nexus_login_btn.setVisible(True)
         else:
-            return self.api_key_edit.text()
+            # Not authorised
+            self.nexus_status.setText("Not Authorised")
+            self.nexus_status.setStyleSheet("color: #f44336;")
+            self.nexus_login_btn.setText("Authorise")
+            self.nexus_login_btn.setVisible(True)
+
+    def _show_copyable_url_dialog(self, url: str):
+        """Show a dialog with a copyable URL"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout, QApplication
+        from PySide6.QtCore import Qt
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Manual Browser Open Required")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(600)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+
+        # Explanation label
+        info_label = QLabel(
+            "Could not open browser automatically.\n\n"
+            "Please copy the URL below and paste it into your browser:"
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #ccc; font-size: 12px;")
+        layout.addWidget(info_label)
+
+        # URL input (read-only but selectable)
+        url_input = QLineEdit()
+        url_input.setText(url)
+        url_input.setReadOnly(True)
+        url_input.selectAll()  # Pre-select text for easy copying
+        url_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #1a1a1a;
+                color: #3fd0ea;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: monospace;
+                font-size: 11px;
+            }
+        """)
+        layout.addWidget(url_input)
+
+        # Button row
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        # Copy button
+        copy_btn = QPushButton("Copy URL")
+        copy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3fd0ea;
+                color: #000;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #5fdfff;
+            }
+        """)
+        def copy_to_clipboard():
+            clipboard = QApplication.clipboard()
+            clipboard.setText(url)
+            copy_btn.setText("Copied!")
+            copy_btn.setEnabled(False)
+        copy_btn.clicked.connect(copy_to_clipboard)
+        button_layout.addWidget(copy_btn)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #444;
+                color: #ccc;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 20px;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+        """)
+        close_btn.clicked.connect(dialog.accept)
+        button_layout.addWidget(close_btn)
+
+        layout.addLayout(button_layout)
+
+        dialog.setLayout(layout)
+        dialog.exec()
+
+    def _handle_nexus_login_click(self):
+        """Handle Nexus login button click"""
+        from jackify.frontends.gui.services.message_service import MessageService
+        from PySide6.QtWidgets import QMessageBox, QProgressDialog, QApplication
+        from PySide6.QtCore import Qt, QThread, Signal
+
+        authenticated, method, _ = self.auth_service.get_auth_status()
+        if authenticated and method == 'oauth':
+            # OAuth is active - offer to revoke
+            reply = MessageService.question(self, "Revoke", "Revoke OAuth authorisation?", safety_level="low")
+            if reply == QMessageBox.Yes:
+                self.auth_service.revoke_oauth()
+                self._update_nexus_status()
+        else:
+            # Not authorised or using API key - offer to authorise with OAuth
+            reply = MessageService.question(self, "Authorise with Nexus",
+                "Your browser will open for Nexus authorisation.\n\n"
+                "Note: Your browser may ask permission to open 'xdg-open'\n"
+                "or Jackify's protocol handler - please click 'Open' or 'Allow'.\n\n"
+                "Please log in and authorise Jackify when prompted.\n\n"
+                "Continue?", safety_level="low")
+
+            if reply != QMessageBox.Yes:
+                return
+
+            # Create progress dialog
+            progress = QProgressDialog(
+                "Waiting for authorisation...\n\nPlease check your browser.",
+                "Cancel",
+                0, 0,
+                self
+            )
+            progress.setWindowTitle("Nexus OAuth")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setMinimumWidth(400)
+
+            # Track cancellation
+            oauth_cancelled = [False]
+
+            def on_cancel():
+                oauth_cancelled[0] = True
+
+            progress.canceled.connect(on_cancel)
+            progress.show()
+            QApplication.processEvents()
+
+            # Create OAuth thread to prevent GUI freeze
+            class OAuthThread(QThread):
+                finished_signal = Signal(bool)
+                message_signal = Signal(str)
+                manual_url_signal = Signal(str)  # Signal when browser fails to open
+
+                def __init__(self, auth_service, parent=None):
+                    super().__init__(parent)
+                    self.auth_service = auth_service
+
+                def run(self):
+                    def show_message(msg):
+                        # Check if this is a "browser failed" message with URL
+                        if "Could not open browser" in msg and "Please open this URL manually:" in msg:
+                            # Extract URL from message
+                            url_start = msg.find("Please open this URL manually:") + len("Please open this URL manually:")
+                            url = msg[url_start:].strip()
+                            self.manual_url_signal.emit(url)
+                        else:
+                            self.message_signal.emit(msg)
+
+                    success = self.auth_service.authorize_oauth(show_browser_message_callback=show_message)
+                    self.finished_signal.emit(success)
+
+            oauth_thread = OAuthThread(self.auth_service, self)
+
+            # Connect message signal to update progress dialog
+            def update_progress_message(msg):
+                if not oauth_cancelled[0]:
+                    progress.setLabelText(f"Waiting for authorisation...\n\n{msg}")
+                    QApplication.processEvents()
+
+            # Connect manual URL signal to show copyable dialog
+            def show_manual_url_dialog(url):
+                if not oauth_cancelled[0]:
+                    progress.hide()  # Hide progress dialog temporarily
+                    self._show_copyable_url_dialog(url)
+                    progress.show()
+
+            oauth_thread.message_signal.connect(update_progress_message)
+            oauth_thread.manual_url_signal.connect(show_manual_url_dialog)
+
+            # Wait for thread completion
+            oauth_success = [False]
+            def on_oauth_finished(success):
+                oauth_success[0] = success
+
+            oauth_thread.finished_signal.connect(on_oauth_finished)
+            oauth_thread.start()
+
+            # Wait for thread to finish (non-blocking event loop)
+            while oauth_thread.isRunning():
+                QApplication.processEvents()
+                oauth_thread.wait(100)  # Check every 100ms
+                if oauth_cancelled[0]:
+                    # User cancelled - thread will still complete but we ignore result
+                    oauth_thread.wait(2000)
+                    if oauth_thread.isRunning():
+                        oauth_thread.terminate()
+                    break
+
+            progress.close()
+            QApplication.processEvents()
+
+            self._update_nexus_status()
+            self._enable_controls_after_operation()
+
+            # Check success first - if OAuth succeeded, ignore cancellation flag
+            # (progress dialog close can trigger cancel handler even on success)
+            if oauth_success[0]:
+                _, _, username = self.auth_service.get_auth_status()
+                if username:
+                    msg = f"OAuth authorisation successful!<br><br>Authorised as: {username}"
+                else:
+                    msg = "OAuth authorisation successful!"
+                MessageService.information(self, "Success", msg, safety_level="low")
+            elif oauth_cancelled[0]:
+                MessageService.information(self, "Cancelled", "OAuth authorisation cancelled.", safety_level="low")
+            else:
+                MessageService.warning(
+                    self,
+                    "Authorisation Failed",
+                    "OAuth authorisation failed.\n\n"
+                    "If you see 'redirect URI mismatch' in your browser,\n"
+                    "the OAuth redirect URI needs to be configured by Nexus.\n\n"
+                    "You can configure an API key in Settings as a fallback.",
+                    safety_level="medium"
+                )
 
     def open_game_type_dialog(self):
         dlg = SelectionDialog("Select Game Type", self.game_types, self, show_search=False)
         if dlg.exec() == QDialog.Accepted and dlg.selected_item:
             self.game_type_btn.setText(dlg.selected_item)
-            self.fetch_modlists_for_game_type(dlg.selected_item)
+            # Store game type for gallery filter
+            self.current_game_type = dlg.selected_item
+            # Enable modlist button immediately - gallery will fetch its own data
+            self.modlist_btn.setEnabled(True)
+            self.modlist_btn.setText("Select Modlist")
+            # No need to fetch modlists here - gallery does it when opened
 
     def fetch_modlists_for_game_type(self, game_type):
         self.current_game_type = game_type  # Store for display formatting
@@ -1013,32 +1466,61 @@ class InstallModlistScreen(QWidget):
             self.modlist_btn.setEnabled(False)
 
     def open_modlist_dialog(self):
-        if not self.current_modlist_display:
+        # CRITICAL: Prevent opening gallery without game type selected
+        # This prevents potential issues with engine path resolution and subprocess spawning
+        if not hasattr(self, 'current_game_type') or not self.current_game_type:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Game Type Required",
+                "Please select a game type before opening the modlist gallery."
+            )
             return
-        dlg = SelectionDialog("Select Modlist", self.current_modlist_display, self, show_search=True, placeholder_text="Search modlists...", show_legend=True)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_item:
-            modlist_id = self._modlist_id_map.get(dlg.selected_item, dlg.selected_item)
-            self.modlist_btn.setText(modlist_id)
-            # Fetch and store the full ModlistInfo for unsupported game detection
-            try:
-                from jackify.backend.services.modlist_service import ModlistService
-                from jackify.backend.models.configuration import SystemInfo
-                is_steamdeck = False
-                if os.path.exists('/etc/os-release'):
-                    with open('/etc/os-release') as f:
-                        if 'steamdeck' in f.read().lower():
-                            is_steamdeck = True
-                system_info = SystemInfo(is_steamdeck=is_steamdeck)
-                modlist_service = ModlistService(system_info)
-                all_modlists = modlist_service.list_modlists()
-                selected_info = next((m for m in all_modlists if m.id == modlist_id), None)
-                self.selected_modlist_info = selected_info.to_dict() if selected_info else None
-                
-                # Auto-populate the Modlist Name field with the display name (user can still modify)
-                if selected_info and selected_info.name:
-                    self.modlist_name_edit.setText(selected_info.name)
-            except Exception as e:
-                self.selected_modlist_info = None
+        
+        from PySide6.QtWidgets import QApplication
+        self.modlist_btn.setEnabled(False)
+        cursor_overridden = False
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            cursor_overridden = True
+
+            game_type_to_human_friendly = {
+                "Skyrim": "Skyrim Special Edition",
+                "Fallout 4": "Fallout 4",
+                "Fallout New Vegas": "Fallout New Vegas",
+                "Oblivion": "Oblivion",
+                "Starfield": "Starfield",
+                "Oblivion Remastered": "Oblivion",
+                "Enderal": "Enderal Special Edition",
+                "Other": None
+            }
+
+            game_filter = None
+            if hasattr(self, 'current_game_type'):
+                game_filter = game_type_to_human_friendly.get(self.current_game_type)
+
+            dlg = ModlistGalleryDialog(game_filter=game_filter, parent=self)
+            if cursor_overridden:
+                QApplication.restoreOverrideCursor()
+                cursor_overridden = False
+
+            if dlg.exec() == QDialog.Accepted and dlg.selected_metadata:
+                metadata = dlg.selected_metadata
+                self.modlist_btn.setText(metadata.title)
+                self.selected_modlist_info = {
+                    'machine_url': metadata.namespacedName,
+                    'title': metadata.title,
+                    'author': metadata.author,
+                    'game': metadata.gameHumanFriendly,
+                    'description': metadata.description,
+                    'nsfw': metadata.nsfw,
+                    'force_down': metadata.forceDown
+                }
+                self.modlist_name_edit.setText(metadata.title)
+        finally:
+            if cursor_overridden:
+                QApplication.restoreOverrideCursor()
+            self.modlist_btn.setEnabled(True)
 
     def browse_wabbajack_file(self):
         file, _ = QFileDialog.getOpenFileName(self, "Select .wabbajack File", os.path.expanduser("~"), "Wabbajack Files (*.wabbajack)")
@@ -1056,6 +1538,24 @@ class InstallModlistScreen(QWidget):
             self.downloads_dir_edit.setText(dir)
 
     def go_back(self):
+        """Navigate back to main menu and restore window size"""
+        # Emit collapse signal to restore compact mode
+        self.resize_request.emit('collapse')
+
+        # Restore window size before navigating away
+        try:
+            main_window = self.window()
+            if main_window:
+                from PySide6.QtCore import QSize
+                from ..utils import apply_window_size_and_position
+
+                # Only set minimum size - DO NOT RESIZE
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                set_responsive_minimum(main_window, min_width=960, min_height=420)
+                # DO NOT resize - let window stay at current size
+        except Exception:
+            pass
+
         if self.stacked_widget:
             self.stacked_widget.setCurrentIndex(self.main_menu_index) 
 
@@ -1091,6 +1591,9 @@ class InstallModlistScreen(QWidget):
     def _check_protontricks(self):
         """Check if protontricks is available before critical operations"""
         try:
+            if self.protontricks_service.is_bundled_mode():
+                return True
+
             is_installed, installation_type, details = self.protontricks_service.detect_protontricks()
 
             if not is_installed:
@@ -1256,10 +1759,21 @@ class InstallModlistScreen(QWidget):
             if self.stacked_widget:
                 self.stacked_widget.setCurrentIndex(4)
 
+            # Calculate elapsed time from workflow start
+            import time
+            if hasattr(self, '_install_workflow_start_time'):
+                time_taken = int(time.time() - self._install_workflow_start_time)
+                mins, secs = divmod(time_taken, 60)
+                time_str = f"{mins} minutes, {secs} seconds" if mins else f"{secs} seconds"
+            else:
+                time_str = "unknown"
+
             # Build success message including TTW installation
             modlist_name = getattr(self, '_ttw_modlist_name', 'Unknown')
-            time_str = getattr(self, '_elapsed_time_str', '0m 0s')
             game_name = "Fallout New Vegas"
+
+            # Clear Activity window before showing success dialog
+            self.file_progress_list.clear()
 
             # Show enhanced success dialog
             success_dialog = SuccessDialog(
@@ -1284,86 +1798,23 @@ class InstallModlistScreen(QWidget):
                 f"TTW integration completed but failed to show success dialog: {str(e)}"
             )
 
-    def _on_api_key_save_toggled(self, checked):
-        """Handle immediate API key saving with silent validation when checkbox is toggled"""
-        try:
-            if checked:
-                # Save API key if one is entered
-                api_key = self._get_actual_api_key().strip()
-                if api_key:
-                    # Silently validate API key first
-                    is_valid, validation_message = self.api_key_service.validate_api_key_works(api_key)
-                    if not is_valid:
-                        # Show error dialog for invalid API key
-                        from jackify.frontends.gui.services.message_service import MessageService
-                        MessageService.critical(
-                            self, 
-                            "Invalid API Key", 
-                            f"The API key is invalid and cannot be saved.\n\nError: {validation_message}", 
-                            safety_level="low"
-                        )
-                        self.save_api_key_checkbox.setChecked(False)  # Uncheck on validation failure
-                        return
-                    
-                    # API key is valid, proceed with saving
-                    success = self.api_key_service.save_api_key(api_key)
-                    if success:
-                        self._show_api_key_feedback("✓ API key saved successfully", is_success=True)
-                        debug_print("DEBUG: API key validated and saved immediately on checkbox toggle")
-                    else:
-                        self._show_api_key_feedback("✗ Failed to save API key - check permissions", is_success=False)
-                        # Uncheck the checkbox since save failed
-                        self.save_api_key_checkbox.setChecked(False)
-                        debug_print("DEBUG: Failed to save API key immediately")
-                else:
-                    self._show_api_key_feedback("Enter an API key first", is_success=False)
-                    # Uncheck the checkbox since no key to save
-                    self.save_api_key_checkbox.setChecked(False)
-            else:
-                # Clear saved API key when unchecked
-                if self.api_key_service.has_saved_api_key():
-                    success = self.api_key_service.clear_saved_api_key()
-                    if success:
-                        self._show_api_key_feedback("✓ API key cleared", is_success=True)
-                        debug_print("DEBUG: Saved API key cleared immediately on checkbox toggle")
-                    else:
-                        self._show_api_key_feedback("✗ Failed to clear API key", is_success=False)
-                        debug_print("DEBUG: Failed to clear API key")
-        except Exception as e:
-            self._show_api_key_feedback(f"✗ Error: {str(e)}", is_success=False)
-            self.save_api_key_checkbox.setChecked(False)
-            debug_print(f"DEBUG: Error in _on_api_key_save_toggled: {e}")
-    
-    def _show_api_key_feedback(self, message, is_success=True):
-        """Show temporary feedback message for API key operations"""
-        # Use tooltip for immediate feedback
-        color = "#22c55e" if is_success else "#ef4444"  # Green for success, red for error
-        self.save_api_key_checkbox.setToolTip(message)
-        
-        # Temporarily change checkbox style to show feedback
-        original_style = self.save_api_key_checkbox.styleSheet()
-        feedback_style = f"QCheckBox {{ color: {color}; font-weight: bold; }}"
-        self.save_api_key_checkbox.setStyleSheet(feedback_style)
-        
-        # Reset style and tooltip after 3 seconds
-        from PySide6.QtCore import QTimer
-        def reset_feedback():
-            self.save_api_key_checkbox.setStyleSheet(original_style)
-            self.save_api_key_checkbox.setToolTip("")
-        
-        QTimer.singleShot(3000, reset_feedback)
-    
+
 
     def validate_and_start_install(self):
         import time
         self._install_workflow_start_time = time.time()
         debug_print('DEBUG: validate_and_start_install called')
 
+        # Immediately show "Initialising" status to provide feedback
+        self.progress_indicator.set_status("Initialising...", 0)
+        QApplication.processEvents()  # Force UI update
+
         # Reload config to pick up any settings changes made in Settings dialog
         self.config_handler.reload_config()
 
         # Check protontricks before proceeding
         if not self._check_protontricks():
+            self.progress_indicator.reset()
             return
 
         # Disable all controls during installation (except Cancel)
@@ -1375,28 +1826,51 @@ class InstallModlistScreen(QWidget):
             if tab_index == 1:  # .wabbajack File tab
                 modlist = self.file_edit.text().strip()
                 if not modlist or not os.path.isfile(modlist) or not modlist.endswith('.wabbajack'):
-                    MessageService.warning(self, "Invalid Modlist", "Please select a valid .wabbajack file.")
-                    self._enable_controls_after_operation()
+                    self._abort_with_message(
+                        "warning",
+                        "Invalid Modlist",
+                        "Please select a valid .wabbajack file."
+                    )
                     return
                 install_mode = 'file'
             else:
-                modlist = self.modlist_btn.text().strip()
-                if not modlist or modlist in ("Select Modlist", "Fetching modlists...", "No modlists found.", "Error fetching modlists."):
-                    MessageService.warning(self, "Invalid Modlist", "Please select a valid modlist.")
-                    self._enable_controls_after_operation()
+                # For online modlists, ALWAYS use machine_url from selected_modlist_info
+                # Button text is now the display name (title), NOT the machine URL
+                if not hasattr(self, 'selected_modlist_info') or not self.selected_modlist_info:
+                    self._abort_with_message(
+                        "warning",
+                        "Invalid Modlist",
+                        "Modlist information is missing. Please select the modlist again from the gallery."
+                    )
                     return
                 
-                # For online modlists, use machine_url instead of display name
-                if hasattr(self, 'selected_modlist_info') and self.selected_modlist_info:
-                    machine_url = self.selected_modlist_info.get('machine_url')
-                    if machine_url:
-                        modlist = machine_url  # Use machine URL for installation
-                        debug_print(f"DEBUG: Using machine_url for installation: {machine_url}")
-                    else:
-                        debug_print("DEBUG: No machine_url found in selected_modlist_info, using display name")
+                machine_url = self.selected_modlist_info.get('machine_url')
+                if not machine_url:
+                    self._abort_with_message(
+                        "warning",
+                        "Invalid Modlist",
+                        "Modlist information is incomplete. Please select the modlist again from the gallery."
+                    )
+                    return
+                
+                # CRITICAL: Use machine_url, NOT button text
+                modlist = machine_url
             install_dir = self.install_dir_edit.text().strip()
             downloads_dir = self.downloads_dir_edit.text().strip()
-            api_key = self._get_actual_api_key().strip()
+
+            # Get authentication token (OAuth or API key) with automatic refresh
+            api_key = self.auth_service.ensure_valid_auth()
+            if not api_key:
+                self._abort_with_message(
+                    "warning",
+                    "Authorisation Required",
+                    "Please authorise with Nexus Mods before installing modlists.\n\n"
+                    "Click the 'Authorise' button above to log in with OAuth,\n"
+                    "or configure an API key in Settings.",
+                    safety_level="medium"
+                )
+                return
+
             modlist_name = self.modlist_name_edit.text().strip()
             missing_fields = []
             if not modlist_name:
@@ -1405,18 +1879,21 @@ class InstallModlistScreen(QWidget):
                 missing_fields.append("Install Directory")
             if not downloads_dir:
                 missing_fields.append("Downloads Directory")
-            if not api_key:
-                missing_fields.append("Nexus API Key")
             if missing_fields:
-                MessageService.warning(self, "Missing Required Fields", f"Please fill in all required fields before starting the install:\n- " + "\n- ".join(missing_fields))
-                self._enable_controls_after_operation()
+                self._abort_with_message(
+                    "warning",
+                    "Missing Required Fields",
+                    "Please fill in all required fields before starting the install:\n- " + "\n- ".join(missing_fields)
+                )
                 return
             validation_handler = ValidationHandler()
             from pathlib import Path
             is_safe, reason = validation_handler.is_safe_install_directory(Path(install_dir))
             if not is_safe:
                 dlg = WarningDialog(reason, parent=self)
-                if not dlg.exec() or not dlg.confirmed:
+                result = dlg.exec()
+                if not result or not dlg.confirmed:
+                    self._abort_install_validation()
                     return
             if not os.path.isdir(install_dir):
                 create = MessageService.question(self, "Create Directory?",
@@ -1428,8 +1905,10 @@ class InstallModlistScreen(QWidget):
                         os.makedirs(install_dir, exist_ok=True)
                     except Exception as e:
                         MessageService.critical(self, "Error", f"Failed to create install directory:\n{e}")
+                        self._abort_install_validation()
                         return
                 else:
+                    self._abort_install_validation()
                     return
             if not os.path.isdir(downloads_dir):
                 create = MessageService.question(self, "Create Directory?",
@@ -1441,28 +1920,12 @@ class InstallModlistScreen(QWidget):
                         os.makedirs(downloads_dir, exist_ok=True)
                     except Exception as e:
                         MessageService.critical(self, "Error", f"Failed to create downloads directory:\n{e}")
+                        self._abort_install_validation()
                         return
                 else:
+                    self._abort_install_validation()
                     return
-            # Handle API key saving BEFORE validation (to match settings dialog behavior)
-            if self.save_api_key_checkbox.isChecked():
-                if api_key:
-                    success = self.api_key_service.save_api_key(api_key)
-                    if success:
-                        debug_print("DEBUG: API key saved successfully")
-                    else:
-                        debug_print("DEBUG: Failed to save API key")
-            else:
-                # If checkbox is unchecked, clear any saved API key
-                if self.api_key_service.has_saved_api_key():
-                    self.api_key_service.clear_saved_api_key()
-                    debug_print("DEBUG: Saved API key cleared")
-            
-            # Validate API key for installation purposes
-            if not api_key or not self.api_key_service._validate_api_key_format(api_key):
-                MessageService.warning(self, "Invalid API Key", "Please enter a valid Nexus API Key.")
-                return
-            
+
             # Handle resolution saving
             resolution = self.resolution_combo.currentText()
             if resolution and resolution != "Leave unchanged":
@@ -1560,18 +2023,50 @@ class InstallModlistScreen(QWidget):
                 # Show unsupported game dialog
                 dialog = UnsupportedGameDialog(self, game_name)
                 if not dialog.show_dialog(self, game_name):
-                    # User cancelled
+                    self._abort_install_validation()
                     return
             
             self.console.clear()
             self.process_monitor.clear()
+            
+            # R&D: Reset progress indicator for new installation
+            self.progress_indicator.reset()
+            self.progress_state_manager.reset()
+            self.file_progress_list.clear()
+            self.file_progress_list.start_cpu_tracking()  # Start tracking CPU during installation
+            self._premium_notice_shown = False
+            self._premium_failure_active = False
+            self._post_install_active = False
+            self._post_install_current_step = 0
+            # Activity tab is always visible (tabs handle visibility automatically)
             
             # Update button states for installation
             self.start_btn.setEnabled(False)
             self.cancel_btn.setVisible(False)
             self.cancel_install_btn.setVisible(True)
             
-            debug_print(f'DEBUG: Calling run_modlist_installer with modlist={modlist}, install_dir={install_dir}, downloads_dir={downloads_dir}, api_key={api_key[:6]}..., install_mode={install_mode}')
+            # CRITICAL: Final safety check - ensure online modlists use machine_url
+            if install_mode == 'online':
+                if hasattr(self, 'selected_modlist_info') and self.selected_modlist_info:
+                    expected_machine_url = self.selected_modlist_info.get('machine_url')
+                    if expected_machine_url:
+                        modlist = expected_machine_url  # Force use machine_url
+                    else:
+                        self._abort_with_message(
+                            "critical",
+                            "Installation Error",
+                            "Cannot determine modlist machine URL. Please select the modlist again."
+                        )
+                        return
+                else:
+                    self._abort_with_message(
+                        "critical",
+                        "Installation Error",
+                        "Modlist information is missing. Please select the modlist again from the gallery."
+                    )
+                    return
+            
+            debug_print(f'DEBUG: Calling run_modlist_installer with modlist={modlist}, install_dir={install_dir}, downloads_dir={downloads_dir}, install_mode={install_mode}')
             self.run_modlist_installer(modlist, install_dir, downloads_dir, api_key, install_mode)
         except Exception as e:
             debug_print(f"DEBUG: Exception in validate_and_start_install: {e}")
@@ -1607,9 +2102,11 @@ class InstallModlistScreen(QWidget):
         class InstallationThread(QThread):
             output_received = Signal(str)
             progress_received = Signal(str)
+            progress_updated = Signal(object)  # R&D: Emits InstallationProgress object
             installation_finished = Signal(bool, str)
+            premium_required_detected = Signal(str)
             
-            def __init__(self, modlist, install_dir, downloads_dir, api_key, modlist_name, install_mode='online'):
+            def __init__(self, modlist, install_dir, downloads_dir, api_key, modlist_name, install_mode='online', progress_state_manager=None):
                 super().__init__()
                 self.modlist = modlist
                 self.install_dir = install_dir
@@ -1619,6 +2116,9 @@ class InstallModlistScreen(QWidget):
                 self.install_mode = install_mode
                 self.cancelled = False
                 self.process_manager = None
+                # R&D: Progress state manager for parsing
+                self.progress_state_manager = progress_state_manager
+                self._premium_signal_sent = False
             
             def cancel(self):
                 self.cancelled = True
@@ -1628,10 +2128,26 @@ class InstallModlistScreen(QWidget):
             def run(self):
                 try:
                     engine_path = get_jackify_engine_path()
+                    
+                    # Verify engine exists and is executable
+                    if not os.path.exists(engine_path):
+                        error_msg = f"Engine not found at: {engine_path}"
+                        debug_print(f"DEBUG: {error_msg}")
+                        self.installation_finished.emit(False, error_msg)
+                        return
+                    
+                    if not os.access(engine_path, os.X_OK):
+                        error_msg = f"Engine is not executable: {engine_path}"
+                        debug_print(f"DEBUG: {error_msg}")
+                        self.installation_finished.emit(False, error_msg)
+                        return
+                    
+                    debug_print(f"DEBUG: Using engine at: {engine_path}")
+                    
                     if self.install_mode == 'file':
-                        cmd = [engine_path, "install", "-w", self.modlist, "-o", self.install_dir, "-d", self.downloads_dir]
+                        cmd = [engine_path, "install", "--show-file-progress", "-w", self.modlist, "-o", self.install_dir, "-d", self.downloads_dir]
                     else:
-                        cmd = [engine_path, "install", "-m", self.modlist, "-o", self.install_dir, "-d", self.downloads_dir]
+                        cmd = [engine_path, "install", "--show-file-progress", "-m", self.modlist, "-o", self.install_dir, "-d", self.downloads_dir]
                     
                     # Check for debug mode and add --debug flag
                     from jackify.backend.handlers.config_handler import ConfigHandler
@@ -1640,8 +2156,20 @@ class InstallModlistScreen(QWidget):
                     if debug_mode:
                         cmd.append('--debug')
                         debug_print("DEBUG: Added --debug flag to jackify-engine command")
-                    env = os.environ.copy()
-                    env['NEXUS_API_KEY'] = self.api_key
+
+                    # Check GPU setting and add --no-gpu flag if disabled
+                    gpu_enabled = config_handler.get('enable_gpu_texture_conversion', True)
+                    if not gpu_enabled:
+                        cmd.append('--no-gpu')
+                        debug_print("DEBUG: Added --no-gpu flag (GPU texture conversion disabled)")
+                    
+                    # CRITICAL: Print the FULL command so we can see exactly what's being passed
+                    debug_print(f"DEBUG: FULL Engine command: {' '.join(cmd)}")
+                    debug_print(f"DEBUG: modlist value being passed: '{self.modlist}'")
+
+                    # Use clean subprocess environment to prevent AppImage variable inheritance
+                    from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
+                    env = get_clean_subprocess_env({'NEXUS_API_KEY': self.api_key})
                     self.process_manager = ProcessManager(cmd, env=env, text=False)
                     ansi_escape = re.compile(rb'\x1b\[[0-9;?]*[ -/]*[@-~]')
                     buffer = b''
@@ -1659,30 +2187,114 @@ class InstallModlistScreen(QWidget):
                                 line, buffer = buffer.split(b'\r', 1)
                                 line = ansi_escape.sub(b'', line)
                                 decoded = line.decode('utf-8', errors='replace')
-                                self.progress_received.emit(decoded)
+
+                                # Notify when Nexus requires Premium before continuing
+                                from jackify.backend.handlers.config_handler import ConfigHandler
+                                config_handler = ConfigHandler()
+                                debug_mode = config_handler.get('debug_mode', False)
+                                if not self._premium_signal_sent and is_non_premium_indicator(decoded):
+                                    self._premium_signal_sent = True
+                                    self.premium_required_detected.emit(decoded.strip() or "Nexus Premium required")
+
+                                # R&D: Process through progress parser
+                                if self.progress_state_manager:
+                                    updated = self.progress_state_manager.process_line(decoded)
+                                    if updated:
+                                        progress_state = self.progress_state_manager.get_state()
+                                        # Debug: Log when we detect file progress
+                                        if progress_state.active_files and debug_mode:
+                                            debug_print(f"DEBUG: Parser detected {len(progress_state.active_files)} active files from line: {decoded[:80]}")
+                                        self.progress_updated.emit(progress_state)
+                                # Filter FILE_PROGRESS spam but keep the status line before it
+                                if '[FILE_PROGRESS]' in decoded:
+                                    parts = decoded.split('[FILE_PROGRESS]', 1)
+                                    if parts[0].strip():
+                                        self.progress_received.emit(parts[0].rstrip())
+                                else:
+                                    # Preserve \r line ending for progress updates
+                                    self.progress_received.emit(decoded + '\r')
                             elif b'\n' in buffer:
                                 line, buffer = buffer.split(b'\n', 1)
                                 line = ansi_escape.sub(b'', line)
                                 decoded = line.decode('utf-8', errors='replace')
+                                
+                                # Notify when Nexus requires Premium before continuing
+                                if not self._premium_signal_sent and is_non_premium_indicator(decoded):
+                                    self._premium_signal_sent = True
+                                    self.premium_required_detected.emit(decoded.strip() or "Nexus Premium required")
+
+                                # R&D: Process through progress parser
+                                from jackify.backend.handlers.config_handler import ConfigHandler
+                                config_handler = ConfigHandler()
+                                debug_mode = config_handler.get('debug_mode', False)
+                                if self.progress_state_manager:
+                                    updated = self.progress_state_manager.process_line(decoded)
+                                    if updated:
+                                        progress_state = self.progress_state_manager.get_state()
+                                        # Debug: Log when we detect file progress
+                                        if progress_state.active_files and debug_mode:
+                                            debug_print(f"DEBUG: Parser detected {len(progress_state.active_files)} active files from line: {decoded[:80]}")
+                                        self.progress_updated.emit(progress_state)
+                                # Filter FILE_PROGRESS spam but keep the status line before it
+                                if '[FILE_PROGRESS]' in decoded:
+                                    parts = decoded.split('[FILE_PROGRESS]', 1)
+                                    if parts[0].strip():
+                                        self.output_received.emit(parts[0].rstrip())
+                                    last_was_blank = False
+                                    continue
+
                                 # Collapse multiple blank lines to one
                                 if decoded.strip() == '':
                                     if not last_was_blank:
-                                        self.output_received.emit('')
+                                        self.output_received.emit('\n')
                                     last_was_blank = True
                                 else:
-                                    self.output_received.emit(decoded)
+                                    # Preserve \n line ending for normal output
+                                    self.output_received.emit(decoded + '\n')
                                     last_was_blank = False
                     if buffer:
                         line = ansi_escape.sub(b'', buffer)
                         decoded = line.decode('utf-8', errors='replace')
-                        self.output_received.emit(decoded)
-                    self.process_manager.wait()
+                        # Filter FILE_PROGRESS from final buffer flush too
+                        if '[FILE_PROGRESS]' in decoded:
+                            parts = decoded.split('[FILE_PROGRESS]', 1)
+                            if parts[0].strip():
+                                self.output_received.emit(parts[0].rstrip())
+                        else:
+                            self.output_received.emit(decoded)
+                    
+                    # Wait for process to complete
+                    returncode = self.process_manager.wait()
+                    
+                    # Capture any remaining output after process ends
+                    if self.process_manager.proc and self.process_manager.proc.stdout:
+                        try:
+                            remaining = self.process_manager.proc.stdout.read()
+                            if remaining:
+                                decoded_remaining = remaining.decode('utf-8', errors='replace')
+                                if decoded_remaining.strip():
+                                    debug_print(f"DEBUG: Remaining output after process exit: {decoded_remaining[:500]}")
+                                    # Filter FILE_PROGRESS from remaining output too
+                                    if '[FILE_PROGRESS]' in decoded_remaining:
+                                        parts = decoded_remaining.split('[FILE_PROGRESS]', 1)
+                                        if parts[0].strip():
+                                            self.output_received.emit(parts[0].rstrip())
+                                    else:
+                                        self.output_received.emit(decoded_remaining)
+                        except Exception as e:
+                            debug_print(f"DEBUG: Error reading remaining output: {e}")
+                    
                     if self.cancelled:
                         self.installation_finished.emit(False, "Installation cancelled by user")
-                    elif self.process_manager.proc.returncode == 0:
+                    elif returncode == 0:
                         self.installation_finished.emit(True, "Installation completed successfully")
                     else:
-                        self.installation_finished.emit(False, "Installation failed")
+                        error_msg = f"Installation failed (exit code {returncode})"
+                        debug_print(f"DEBUG: Engine exited with code {returncode}")
+                        # Try to get more details from the process
+                        if self.process_manager.proc:
+                            debug_print(f"DEBUG: Process stderr/stdout may contain error details")
+                        self.installation_finished.emit(False, error_msg)
                 except Exception as e:
                     self.installation_finished.emit(False, f"Installation error: {str(e)}")
                 finally:
@@ -1691,11 +2303,16 @@ class InstallModlistScreen(QWidget):
 
         # After the InstallationThread class definition, add:
         self.install_thread = InstallationThread(
-            modlist, install_dir, downloads_dir, api_key, self.modlist_name_edit.text().strip(), install_mode
+            modlist, install_dir, downloads_dir, api_key, self.modlist_name_edit.text().strip(), install_mode,
+            progress_state_manager=self.progress_state_manager  # R&D: Pass progress state manager
         )
         self.install_thread.output_received.connect(self.on_installation_output)
         self.install_thread.progress_received.connect(self.on_installation_progress)
+        self.install_thread.progress_updated.connect(self.on_progress_updated)  # R&D: Connect progress update
         self.install_thread.installation_finished.connect(self.on_installation_finished)
+        self.install_thread.premium_required_detected.connect(self.on_premium_required_detected)
+        # R&D: Pass progress state manager to thread
+        self.install_thread.progress_state_manager = self.progress_state_manager
         self.install_thread.start()
 
     def on_installation_output(self, message):
@@ -1705,25 +2322,401 @@ class InstallModlistScreen(QWidget):
             # Log internal messages to file but don't show in console
             self._write_to_log_file(message)
             return
+        
+        # Detect known engine bugs and provide helpful guidance
+        msg_lower = message.lower()
+        if 'destination array was not long enough' in msg_lower or \
+           ('argumentexception' in msg_lower and 'downloadmachineurl' in msg_lower):
+            # This is a known bug in jackify-engine 0.4.0 during .wabbajack download
+            if not hasattr(self, '_array_error_notified'):
+                self._array_error_notified = True
+                guidance = (
+                    "\n[Jackify] Engine Error Detected: Buffer size issue during .wabbajack download.\n"
+                    "[Jackify] This is a known bug in jackify-engine 0.4.0.\n"
+                    "[Jackify] Workaround: Delete any partial .wabbajack files in your downloads directory and try again.\n"
+                )
+                self._safe_append_text(guidance)
+        
+        # R&D: Always write output to console buffer so it's available when user toggles Show Details
+        # The console visibility is controlled by the checkbox, not whether we write to it
         self._safe_append_text(message)
     
     def on_installation_progress(self, progress_message):
-        """Replace the last line in the console for progress updates"""
-        cursor = self.console.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.movePosition(QTextCursor.StartOfLine, QTextCursor.KeepAnchor)
-        cursor.removeSelectedText()
-        cursor.insertText(progress_message)
-        # Don't force scroll for progress updates - let user control
+        """
+        Handle progress messages from installation thread.
+
+        NOTE: This is called for MOST engine output, not just progress lines!
+        The name is misleading - it's actually the main output path.
+        """
+        # Always write output to console buffer (same as on_installation_output)
+        self._safe_append_text(progress_message)
+
+    def on_premium_required_detected(self, engine_line: str):
+        """Handle detection of Nexus Premium requirement."""
+        if self._premium_notice_shown:
+            return
+
+        self._premium_notice_shown = True
+        self._premium_failure_active = True
+
+        user_message = (
+            "Nexus Mods rejected the automated download because this account is not Premium. "
+            "Jackify currently requires a Nexus Premium membership for automated installs, "
+            "and non-premium support is still planned."
+        )
+
+        if engine_line:
+            self._safe_append_text(f"[Jackify] Engine message: {engine_line}")
+        self._safe_append_text("[Jackify] Jackify detected that Nexus Premium is required for this modlist install.")
+
+        MessageService.critical(
+            self,
+            "Nexus Premium Required",
+            f"{user_message}\n\nDetected engine output:\n{engine_line or 'Buy Nexus Premium to automate this process.'}",
+            safety_level="medium"
+        )
+
+        if hasattr(self, 'install_thread') and self.install_thread:
+            self.install_thread.cancel()
+    
+    def on_progress_updated(self, progress_state):
+        """R&D: Handle structured progress updates from parser"""
+        # Calculate proper overall progress during BSA building
+        # During BSA building, file installation is at 100% but BSAs are still being built
+        # Override overall_percent to show BSA building progress instead
+        if progress_state.bsa_building_total > 0 and progress_state.bsa_building_current > 0:
+            bsa_percent = (progress_state.bsa_building_current / progress_state.bsa_building_total) * 100.0
+            progress_state.overall_percent = min(99.0, bsa_percent)  # Cap at 99% until fully complete
+
+        # Update progress indicator widget
+        self.progress_indicator.update_progress(progress_state)
+        
+        # Only show file progress list if console is not visible (mutually exclusive)
+        console_visible = self.show_details_checkbox.isChecked()
+        
+        # Determine phase display name up front (short/stable label)
+        phase_label = progress_state.get_phase_label()
+        
+        # During installation or extraction phase, show summary counter instead of individual files
+        # This avoids cluttering the UI with hundreds of completed files
+        is_installation_phase = (
+            progress_state.phase == InstallationPhase.INSTALL or
+            (progress_state.phase_name and 'install' in progress_state.phase_name.lower())
+        )
+        is_extraction_phase = (
+            progress_state.phase == InstallationPhase.EXTRACT or
+            (progress_state.phase_name and 'extract' in progress_state.phase_name.lower())
+        )
+        
+        # Detect BSA building phase - check multiple indicators
+        is_bsa_building = False
+        
+        # Check phase name for BSA indicators
+        if progress_state.phase_name:
+            phase_lower = progress_state.phase_name.lower()
+            if 'bsa' in phase_lower or ('building' in phase_lower and progress_state.phase == InstallationPhase.INSTALL):
+                is_bsa_building = True
+        
+        # Check message/status text for BSA building indicators
+        if not is_bsa_building and progress_state.message:
+            msg_lower = progress_state.message.lower()
+            if ('building' in msg_lower or 'writing' in msg_lower or 'verifying' in msg_lower) and '.bsa' in msg_lower:
+                is_bsa_building = True
+        
+        # Check if we have BSA files being processed (even if they're at 100%, they indicate BSA phase)
+        if not is_bsa_building and progress_state.active_files:
+            bsa_files = [f for f in progress_state.active_files if f.filename.lower().endswith('.bsa')]
+            if len(bsa_files) > 0:
+                # If we have any BSA files and we're in INSTALL phase, likely BSA building
+                if progress_state.phase == InstallationPhase.INSTALL:
+                    is_bsa_building = True
+        
+        # Also check display text for BSA mentions (fallback)
+        if not is_bsa_building:
+            display_lower = progress_state.display_text.lower()
+            if 'bsa' in display_lower and progress_state.phase == InstallationPhase.INSTALL:
+                is_bsa_building = True
+        
+        now_mono = time.monotonic()
+        if is_bsa_building:
+            self._bsa_hold_deadline = now_mono + 1.5
+        elif now_mono < self._bsa_hold_deadline:
+            is_bsa_building = True
+        else:
+            self._bsa_hold_deadline = now_mono
+
+        if is_installation_phase:
+            # During installation, we may have BSA building AND file installation happening
+            # Show both: install summary + any active BSA files
+            # Render loop handles smooth updates - just set target state
+            
+            current_step = progress_state.phase_step
+            from jackify.shared.progress_models import FileProgress, OperationType
+
+            display_items = []
+
+            # Line 1: Always show "Installing Files: X/Y" at the top (no progress bar, no size)
+            if current_step > 0 or progress_state.phase_max_steps > 0:
+                install_line = FileProgress(
+                    filename=f"Installing Files: {current_step}/{progress_state.phase_max_steps}",
+                    operation=OperationType.INSTALL,
+                    percent=0.0,
+                    speed=-1.0
+                )
+                install_line._no_progress_bar = True  # Flag to hide progress bar
+                display_items.append(install_line)
+
+            # Lines 2+: Show converting textures and BSA files
+            # Extract and categorize active files
+            for f in progress_state.active_files:
+                if f.operation == OperationType.INSTALL:
+                    if f.filename.lower().endswith('.bsa') or f.filename.lower().endswith('.ba2'):
+                        # BSA: filename.bsa (42/89) - Use state-level BSA counter
+                        if progress_state.bsa_building_total > 0:
+                            display_filename = f"BSA: {f.filename} ({progress_state.bsa_building_current}/{progress_state.bsa_building_total})"
+                        else:
+                            display_filename = f"BSA: {f.filename}"
+
+                        display_file = FileProgress(
+                            filename=display_filename,
+                            operation=f.operation,
+                            percent=f.percent,
+                            current_size=0,  # Don't show size
+                            total_size=0,
+                            speed=-1.0  # No speed
+                        )
+                        display_items.append(display_file)
+                        if len(display_items) >= 4:  # Max 1 install line + 3 operations
+                            break
+                    elif f.filename.lower().endswith(('.dds', '.png', '.tga', '.bmp')):
+                        # Converting Texture: filename.dds (234/1078)
+                        # Use state-level texture counter (more reliable than file-level)
+                        if progress_state.texture_conversion_total > 0:
+                            display_filename = f"Converting Texture: {f.filename} ({progress_state.texture_conversion_current}/{progress_state.texture_conversion_total})"
+                        else:
+                            # No texture counter available, just show filename
+                            display_filename = f"Converting Texture: {f.filename}"
+
+                        display_file = FileProgress(
+                            filename=display_filename,
+                            operation=f.operation,
+                            percent=f.percent,
+                            current_size=0,  # Don't show size
+                            total_size=0,
+                            speed=-1.0  # No speed
+                        )
+                        display_items.append(display_file)
+                        if len(display_items) >= 4:  # Max 1 install line + 3 operations
+                            break
+
+            # Update target state (render loop handles smooth display)
+            # Explicitly pass None for summary_info to clear any stale summary data
+            if display_items:
+                self.file_progress_list.update_files(display_items, current_phase="Installing", summary_info=None)
+            return
+        elif is_extraction_phase:
+            # Show summary info for Extracting phase (step count)
+            # Render loop handles smooth updates - just set target state
+            # Explicitly pass empty list for file_progresses to clear any stale file list
+            current_step = progress_state.phase_step
+            summary_info = {
+                'current_step': current_step,
+                'max_steps': progress_state.phase_max_steps,
+            }
+            phase_display_name = phase_label or "Extracting"
+            self.file_progress_list.update_files([], current_phase=phase_display_name, summary_info=summary_info)
+            return
+        elif progress_state.active_files:
+            if self.debug:
+                debug_print(f"DEBUG: Updating file progress list with {len(progress_state.active_files)} files")
+                for fp in progress_state.active_files:
+                    debug_print(f"DEBUG:   - {fp.filename}: {fp.percent:.1f}% ({fp.operation.value})")
+            # Pass phase label to update header (e.g., "[Activity - Downloading]")
+            # Explicitly clear summary_info when showing file list
+            self.file_progress_list.update_files(progress_state.active_files, current_phase=phase_label, summary_info=None)
+        else:
+            # Show empty state so widget stays visible even when no files are active
+            self.file_progress_list.update_files([], current_phase=phase_label)
+    
+    def _on_show_details_toggled(self, checked: bool):
+        """R&D: Toggle console visibility (reuse TTW pattern)"""
+        from PySide6.QtCore import Qt as _Qt
+        self._toggle_console_visibility(_Qt.Checked if checked else _Qt.Unchecked)
+    
+    def _toggle_console_visibility(self, state):
+        """R&D: Toggle console visibility only
+        
+        When "Show Details" is checked:
+            - Show Console (below tabs)
+            - Expand window height
+        When "Show Details" is unchecked:
+            - Hide Console
+            - Collapse window height
+        
+        Note: Activity and Process Monitor tabs are always available via tabs.
+        """
+        is_checked = (state == Qt.Checked)
+        
+        # Get main window reference (like TTW screen)
+        main_window = None
+        try:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                main_window = app.activeWindow()
+                # Try to find the actual main window (parent of stacked widget)
+                if self.stacked_widget and self.stacked_widget.parent():
+                    main_window = self.stacked_widget.parent()
+        except Exception:
+            pass
+        
+        # Save geometry on first expand (like TTW screen)
+        if is_checked and main_window and self._saved_geometry is None:
+            try:
+                self._saved_geometry = main_window.geometry()
+                self._saved_min_size = main_window.minimumSize()
+            except Exception:
+                pass
+        
+        if is_checked:
+            # Keep upper section height consistent - don't change it
+            # This prevents buttons from being cut off
+            try:
+                if hasattr(self, 'upper_section_widget') and self.upper_section_widget is not None:
+                    # Maintain consistent height - ALWAYS use the stored fixed height
+                    # Never recalculate - use the exact same height calculated in showEvent
+                    if hasattr(self, '_upper_section_fixed_height') and self._upper_section_fixed_height is not None:
+                        self.upper_section_widget.setMaximumHeight(self._upper_section_fixed_height)
+                        self.upper_section_widget.setMinimumHeight(self._upper_section_fixed_height)  # Lock it
+                    # If somehow not stored, it should have been set in showEvent - don't recalculate here
+                    self.upper_section_widget.updateGeometry()
+            except Exception:
+                pass
+            # Show console
+            self.console.setVisible(True)
+            self.console.show()
+            self.console.setMinimumHeight(200)
+            self.console.setMaximumHeight(16777215)  # Remove height limit
+            try:
+                self.console.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                # Set stretch on console in its layout to fill space
+                console_layout = self.console.parent().layout()
+                if console_layout:
+                    console_layout.setStretchFactor(console_layout.indexOf(self.console), 1)
+                    # Restore spacing when console is visible
+                    console_layout.setSpacing(4)
+            except Exception:
+                pass
+            try:
+                # Set spacing in console_and_buttons_layout when console is visible
+                if hasattr(self, 'console_and_buttons_layout'):
+                    self.console_and_buttons_layout.setSpacing(4)  # Small gap between console and buttons
+                # Set stretch on console_and_buttons_widget to fill space when expanded
+                if hasattr(self, 'console_and_buttons_widget'):
+                    self.main_overall_vbox.setStretchFactor(self.console_and_buttons_widget, 1)
+                    # Allow expansion when console is visible - remove fixed height constraint
+                    self.console_and_buttons_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                    # Clear fixed height by setting min/max (setFixedHeight sets both, so we override it)
+                    self.console_and_buttons_widget.setMinimumHeight(0)
+                    self.console_and_buttons_widget.setMaximumHeight(16777215)
+                    self.console_and_buttons_widget.updateGeometry()
+            except Exception:
+                pass
+            
+            # Notify parent to expand - let main window handle resizing
+            try:
+                self.resize_request.emit('expand')
+            except Exception:
+                pass
+        else:
+            # Keep upper section height consistent - use same constraint
+            # This prevents buttons from being cut off
+            try:
+                if hasattr(self, 'upper_section_widget') and self.upper_section_widget is not None:
+                    # Use the same stored fixed height for consistency
+                    # ALWAYS use the stored height - never recalculate to avoid drift
+                    if hasattr(self, '_upper_section_fixed_height') and self._upper_section_fixed_height is not None:
+                        self.upper_section_widget.setMaximumHeight(self._upper_section_fixed_height)
+                        self.upper_section_widget.setMinimumHeight(self._upper_section_fixed_height)  # Lock it
+                    # If somehow not stored, it should have been set in showEvent - don't recalculate here
+                    self.upper_section_widget.updateGeometry()
+            except Exception:
+                pass
+            # Hide console and ensure it takes zero space
+            self.console.setVisible(False)
+            self.console.setMinimumHeight(0)
+            self.console.setMaximumHeight(0)
+            # Use Ignored size policy so it doesn't participate in layout calculations
+            self.console.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            try:
+                # Remove stretch from console in its layout
+                console_layout = self.console.parent().layout()
+                if console_layout:
+                    console_layout.setStretchFactor(console_layout.indexOf(self.console), 0)
+                    # CRITICAL: Set spacing to 0 when console is hidden to eliminate gap
+                    console_layout.setSpacing(0)
+            except Exception:
+                pass
+            try:
+                # CRITICAL: Set spacing to 0 in console_and_buttons_layout when console is hidden
+                if hasattr(self, 'console_and_buttons_layout'):
+                    self.console_and_buttons_layout.setSpacing(0)
+                # Remove stretch from console container when collapsed
+                console_container = self.console.parent()
+                if console_container:
+                    self.main_overall_vbox.setStretchFactor(console_container, 0)
+                # Also remove stretch from console_and_buttons_widget to prevent large gaps
+                if hasattr(self, 'console_and_buttons_widget'):
+                    self.main_overall_vbox.setStretchFactor(self.console_and_buttons_widget, 0)
+                    # Use Minimum size policy - takes only the minimum space needed (just buttons)
+                    self.console_and_buttons_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    # Lock height to exactly button row height when collapsed
+                    self.console_and_buttons_widget.setFixedHeight(50)  # Match button row height exactly
+                    # Update geometry to force recalculation
+                    self.console_and_buttons_widget.updateGeometry()
+            except Exception:
+                pass
+            
+            # Notify parent to collapse - let main window handle resizing
+            try:
+                self.resize_request.emit('collapse')
+            except Exception:
+                pass
     
     def on_installation_finished(self, success, message):
         """Handle installation completion"""
         debug_print(f"DEBUG: on_installation_finished called with success={success}, message={message}")
+        # R&D: Clear all progress displays when installation completes
+        self.progress_state_manager.reset()
+        # Clear file list but keep CPU tracking running for configuration phase
+        self.file_progress_list.list_widget.clear()
+        self.file_progress_list._file_items.clear()
+        self.file_progress_list._summary_widget = None
+        self.file_progress_list._transition_label = None
+        self.file_progress_list._last_phase = None
+        
         if success:
-            self._safe_append_text(f"\nSuccess: {message}")
+            # Update progress indicator with completion
+            from jackify.shared.progress_models import InstallationProgress, InstallationPhase
+            final_state = InstallationProgress(
+                phase=InstallationPhase.FINALIZE,
+                phase_name="Installation Complete",
+                overall_percent=100.0
+            )
+            self.progress_indicator.update_progress(final_state)
+            
+            if self.show_details_checkbox.isChecked():
+                self._safe_append_text(f"\nSuccess: {message}")
             self.process_finished(0, QProcess.NormalExit)  # Simulate successful completion
         else:
-            self._safe_append_text(f"\nError: {message}")
+            # Reset to initial state on failure
+            self.progress_indicator.reset()
+
+            if self._premium_failure_active:
+                message = "Installation stopped because Nexus Premium is required for automated downloads."
+            
+            if self.show_details_checkbox.isChecked():
+                self._safe_append_text(f"\nError: {message}")
             self.process_finished(1, QProcess.CrashExit)  # Simulate error
 
     def process_finished(self, exit_code, exit_status):
@@ -1784,13 +2777,29 @@ class InstallModlistScreen(QWidget):
                     # Re-enable controls since operation is complete
                     self._enable_controls_after_operation()
         else:
-            # Check for user cancellation first
-            last_output = self.console.toPlainText()
-            if "cancelled by user" in last_output.lower():
+            # Check for user cancellation first - check message parameter first, then console
+            if self._premium_failure_active:
+                MessageService.warning(
+                    self,
+                    "Nexus Premium Required",
+                    "Jackify stopped the installation because Nexus Mods reported that this account is not Premium.\n\n"
+                    "Automatic installs currently require Nexus Premium. Non-premium support is planned.",
+                    safety_level="medium"
+                )
+                self._safe_append_text("\nInstall stopped: Nexus Premium required.")
+                self._premium_failure_active = False
+            elif hasattr(self, '_cancellation_requested') and self._cancellation_requested:
+                # User explicitly cancelled via cancel button
                 MessageService.information(self, "Installation Cancelled", "The installation was cancelled by the user.", safety_level="low")
+                self._cancellation_requested = False
             else:
-                MessageService.critical(self, "Install Failed", "The modlist install failed. Please check the console output for details.")
-                self._safe_append_text(f"\nInstall failed (exit code {exit_code}).")
+                # Check console as fallback
+                last_output = self.console.toPlainText()
+                if "cancelled by user" in last_output.lower():
+                    MessageService.information(self, "Installation Cancelled", "The installation was cancelled by the user.", safety_level="low")
+                else:
+                    MessageService.critical(self, "Install Failed", "The modlist install failed. Please check the console output for details.")
+                    self._safe_append_text(f"\nInstall failed (exit code {exit_code}).")
         self.console.moveCursor(QTextCursor.End)
 
     def _setup_scroll_tracking(self):
@@ -1820,6 +2829,234 @@ class InstallModlistScreen(QWidget):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(100, self._reset_manual_scroll_if_at_bottom)
     
+    def _build_post_install_sequence(self):
+        """
+        Define the ordered steps for post-install (Jackify-managed) operations.
+
+        These steps represent Jackify's automated Steam integration and configuration workflow
+        that runs AFTER the jackify-engine completes modlist installation. Progress is shown as
+        "X/Y" in the progress banner and Activity window.
+
+        The post-install steps are:
+        1. Preparing Steam integration - Initial setup before creating Steam shortcut
+        2. Creating Steam shortcut - Add modlist to Steam library with proper Proton settings
+        3. Restarting Steam - Restart Steam to make shortcut visible and create AppID
+        4. Creating Proton prefix - Launch temporary batch file to initialize Proton prefix
+        5. Verifying Steam setup - Confirm prefix exists and Proton version is correct
+        6. Steam integration complete - Steam setup finished successfully
+        7. Installing Wine components - Install vcrun, dotnet, and other Wine dependencies
+        8. Applying registry files - Import .reg files for game configuration
+        9. Installing .NET fixes - Apply .NET framework workarounds if needed
+        10. Enabling dotfiles - Make hidden config files visible in file manager
+        11. Setting permissions - Ensure modlist files have correct permissions
+        12. Backing up configuration - Create backup of ModOrganizer.ini
+        13. Finalising Jackify configuration - All post-install steps complete
+        """
+        return [
+            {
+                'id': 'prepare',
+                'label': "Preparing Steam integration",
+                'keywords': [
+                    "starting automated steam setup",
+                    "starting configuration phase",
+                    "starting configuration"
+                ],
+            },
+            {
+                'id': 'steam_shortcut',
+                'label': "Creating Steam shortcut",
+                'keywords': [
+                    "creating steam shortcut",
+                    "steam shortcut created successfully"
+                ],
+            },
+            {
+                'id': 'steam_restart',
+                'label': "Restarting Steam",
+                'keywords': [
+                    "restarting steam",
+                    "steam restarted successfully"
+                ],
+            },
+            {
+                'id': 'proton_prefix',
+                'label': "Creating Proton prefix",
+                'keywords': [
+                    "creating proton prefix",
+                    "proton prefix created successfully",
+                    "temporary batch file launched",
+                    "verifying prefix creation"
+                ],
+            },
+            {
+                'id': 'steam_verify',
+                'label': "Verifying Steam setup",
+                'keywords': [
+                    "verifying setup",
+                    "verifying prefix",
+                    "setup verification completed",
+                    "detecting actual appid",
+                    "steam configuration complete"
+                ],
+            },
+            {
+                'id': 'steam_complete',
+                'label': "Steam integration complete",
+                'keywords': [
+                    "steam integration complete",
+                    "steam integration",
+                    "steam configuration complete!"
+                ],
+            },
+            {
+                'id': 'wine_components',
+                'label': "Installing Wine components",
+                'keywords': [
+                    "installing wine components",
+                    "wine components",
+                    "vcrun",
+                    "dotnet",
+                    "running winetricks",
+                ],
+            },
+            {
+                'id': 'registry_files',
+                'label': "Applying registry files",
+                'keywords': [
+                    "applying registry",
+                    "importing registry",
+                    ".reg file",
+                    "registry files",
+                ],
+            },
+            {
+                'id': 'dotnet_fixes',
+                'label': "Installing .NET fixes",
+                'keywords': [
+                    "dotnet fix",
+                    ".net fix",
+                    "installing .net",
+                ],
+            },
+            {
+                'id': 'enable_dotfiles',
+                'label': "Enabling dotfiles",
+                'keywords': [
+                    "enabling dotfiles",
+                    "dotfiles",
+                    "hidden files",
+                ],
+            },
+            {
+                'id': 'set_permissions',
+                'label': "Setting permissions",
+                'keywords': [
+                    "setting permissions",
+                    "chmod",
+                    "permissions",
+                ],
+            },
+            {
+                'id': 'backup_config',
+                'label': "Backing up configuration",
+                'keywords': [
+                    "backing up",
+                    "modorganizer.ini",
+                    "backup",
+                ],
+            },
+            {
+                'id': 'config_finalize',
+                'label': "Finalising Jackify configuration",
+                'keywords': [
+                    "configuration completed successfully",
+                    "configuration complete",
+                    "manual steps validation failed",
+                    "configuration failed"
+                ],
+            },
+        ]
+    
+    def _begin_post_install_feedback(self):
+        """Reset trackers and surface post-install progress in collapsed mode."""
+        self._post_install_active = True
+        self._post_install_current_step = 0
+        self._post_install_last_label = "Preparing Steam integration"
+        total = max(1, self._post_install_total_steps)
+        self._update_post_install_ui(self._post_install_last_label, 0, total)
+    
+    def _handle_post_install_progress(self, message: str):
+        """Translate backend progress messages into collapsed-mode feedback."""
+        if not self._post_install_active or not message:
+            return
+        
+        text = message.strip()
+        if not text:
+            return
+        normalized = text.lower()
+        total = max(1, self._post_install_total_steps)
+        matched = False
+        for idx, step in enumerate(self._post_install_sequence, start=1):
+            if any(keyword in normalized for keyword in step['keywords']):
+                matched = True
+                if idx >= self._post_install_current_step:
+                    self._post_install_current_step = idx
+                    self._post_install_last_label = step['label']
+                    self._update_post_install_ui(step['label'], idx, total, detail=text)
+                else:
+                    self._update_post_install_ui(step['label'], idx, total, detail=text)
+                break
+        
+        if not matched and self._post_install_current_step > 0:
+            label = self._post_install_last_label or "Post-installation"
+            self._update_post_install_ui(label, self._post_install_current_step, total, detail=text)
+    
+    def _strip_timestamp_prefix(self, text: str) -> str:
+        """Remove timestamp prefix like '[00:03:15]' from text."""
+        import re
+        # Match timestamps like [00:03:15], [01:23:45], etc.
+        timestamp_pattern = r'^\[\d{2}:\d{2}:\d{2}\]\s*'
+        return re.sub(timestamp_pattern, '', text)
+
+    def _update_post_install_ui(self, label: str, step: int, total: int, detail: Optional[str] = None):
+        """Update progress indicator + activity summary for post-install steps."""
+        display_label = label
+        if detail:
+            # Remove timestamp prefix from detail messages
+            clean_detail = self._strip_timestamp_prefix(detail.strip())
+            if clean_detail:
+                if clean_detail.lower().startswith(label.lower()):
+                    display_label = clean_detail
+                else:
+                    display_label = clean_detail
+        total = max(1, total)
+        step_clamped = max(0, min(step, total))
+        overall_percent = (step_clamped / total) * 100.0
+        progress_state = InstallationProgress(
+            phase=InstallationPhase.FINALIZE,
+            phase_name=display_label,
+            phase_step=step_clamped,
+            phase_max_steps=total,
+            overall_percent=overall_percent
+        )
+        self.progress_indicator.update_progress(progress_state)
+        summary_info = {
+            'current_step': step_clamped,
+            'max_steps': total,
+        }
+        self.file_progress_list.update_files([], current_phase=display_label, summary_info=summary_info)
+    
+    def _end_post_install_feedback(self, success: bool):
+        """Mark the end of post-install feedback."""
+        if not self._post_install_active:
+            return
+        total = max(1, self._post_install_total_steps)
+        final_step = total if success else max(0, self._post_install_current_step)
+        label = "Post-installation complete" if success else "Post-installation stopped"
+        self._update_post_install_ui(label, final_step, total)
+        self._post_install_active = False
+        self._post_install_last_label = label
+    
     def _reset_manual_scroll_if_at_bottom(self):
         """Reset manual scroll flag if user is still at bottom after delay"""
         scrollbar = self.console.verticalScrollBar()
@@ -1827,22 +3064,36 @@ class InstallModlistScreen(QWidget):
             self._user_manually_scrolled = False
 
     def _safe_append_text(self, text):
-        """Append text with professional auto-scroll behavior"""
+        """
+        Append text with professional auto-scroll behavior.
+
+        Handles carriage return (\\r) for in-place updates and newline (\\n) for new lines.
+        """
         # Write all messages to log file (including internal messages)
         self._write_to_log_file(text)
-        
+
         # Filter out internal status messages from user console display
         if text.strip().startswith('[Jackify]'):
             # Internal messages are logged but not shown in user console
             return
-            
+
+        # Check if this is a carriage return update (should replace last line)
+        if '\r' in text and '\n' not in text:
+            # Carriage return - replace last line
+            self._replace_last_console_line(text.replace('\r', ''))
+            return
+
+        # Handle mixed \r\n or just \n - normal append
+        # Clean up any remaining \r characters
+        clean_text = text.replace('\r', '')
+
         scrollbar = self.console.verticalScrollBar()
         # Check if user was at bottom BEFORE adding text
         was_at_bottom = (scrollbar.value() >= scrollbar.maximum() - 1)  # Allow 1px tolerance
-        
+
         # Add the text
-        self.console.append(text)
-        
+        self.console.append(clean_text)
+
         # Auto-scroll if user was at bottom and hasn't manually scrolled
         # Re-check bottom state after text addition for better reliability
         if (was_at_bottom and not self._user_manually_scrolled) or \
@@ -1851,6 +3102,79 @@ class InstallModlistScreen(QWidget):
             # Ensure user can still manually scroll up during rapid updates
             if scrollbar.value() == scrollbar.maximum():
                 self._was_at_bottom = True
+
+    def _is_similar_progress_line(self, text):
+        """Check if this line is a similar progress update to the last line"""
+        if not hasattr(self, '_last_console_line') or not self._last_console_line:
+            return False
+
+        # Don't deduplicate if either line contains important markers
+        important_markers = [
+            'complete',
+            'failed',
+            'error',
+            'warning',
+            'starting',
+            '===',
+            '---',
+            'SUCCESS',
+            'FAILED',
+        ]
+
+        text_lower = text.lower()
+        last_lower = self._last_console_line.lower()
+
+        for marker in important_markers:
+            if marker.lower() in text_lower or marker.lower() in last_lower:
+                return False
+
+        # Patterns that indicate this is a progress line that should replace the previous
+        # These are the status lines that update rapidly with changing numbers
+        progress_patterns = [
+            'Installing files',
+            'Extracting files',
+            'Downloading:',
+            'Building BSAs',
+            'Validating',
+        ]
+
+        # Check if both current and last line contain the same progress pattern
+        # AND the lines are actually different (not exact duplicates)
+        for pattern in progress_patterns:
+            if pattern in text and pattern in self._last_console_line:
+                # Only deduplicate if the numbers/progress changed (not exact duplicate)
+                if text.strip() != self._last_console_line.strip():
+                    return True
+
+        # Special case: texture conversion status is embedded in Installing files lines
+        # Match lines like "Installing files X/Y (A/B) - Converting textures: N/M"
+        if '- Converting textures:' in text and '- Converting textures:' in self._last_console_line:
+            if text.strip() != self._last_console_line.strip():
+                return True
+
+        return False
+
+    def _replace_last_console_line(self, text):
+        """Replace the last line in the console with new text"""
+        scrollbar = self.console.verticalScrollBar()
+        was_at_bottom = (scrollbar.value() >= scrollbar.maximum() - 1)
+
+        # Move cursor to end and select the last line
+        cursor = self.console.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.select(QTextCursor.LineUnderCursor)
+        cursor.removeSelectedText()
+        cursor.deletePreviousChar()  # Remove the newline
+
+        # Insert the new text
+        self.console.append(text)
+
+        # Track this line
+        self._last_console_line = text
+
+        # Restore scroll position
+        if was_at_bottom or not self._user_manually_scrolled:
+            scrollbar.setValue(scrollbar.maximum())
 
     def _write_to_log_file(self, message):
         """Write message to workflow log file with timestamp"""
@@ -1912,11 +3236,38 @@ class InstallModlistScreen(QWidget):
         # Controls are managed by the proper control management system
         if success:
             self._safe_append_text("Steam restarted successfully.")
-            
+
+            # Force Steam GUI to start after restart
+            # Ensure Steam GUI is visible after restart
+            # start_steam() now uses -foreground, but we'll also try to bring GUI to front
+            debug_print("DEBUG: Ensuring Steam GUI is visible after restart")
+            try:
+                import subprocess
+                import time
+                # Wait a moment for Steam processes to stabilize
+                time.sleep(3)
+                # Try multiple methods to ensure GUI opens
+                # Method 1: steam:// protocol (works if Steam is running)
+                try:
+                    subprocess.Popen(['xdg-open', 'steam://open/main'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    debug_print("DEBUG: Issued steam://open/main command")
+                    time.sleep(1)
+                except Exception as e:
+                    debug_print(f"DEBUG: steam://open/main failed: {e}")
+                
+                # Method 2: Direct steam -foreground command (redundant but ensures GUI)
+                try:
+                    subprocess.Popen(['steam', '-foreground'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    debug_print("DEBUG: Issued steam -foreground command")
+                except Exception as e2:
+                    debug_print(f"DEBUG: steam -foreground failed: {e2}")
+            except Exception as e:
+                debug_print(f"DEBUG: Error ensuring Steam GUI visibility: {e}")
+
             # Save context for later use in configuration
             self._manual_steps_retry_count = 0
             self._current_modlist_name = self.modlist_name_edit.text().strip()
-            
+
             # Save resolution for later use in configuration
             resolution = self.resolution_combo.currentText()
             # Extract resolution properly (e.g., "1280x800" from "1280x800 (Steam Deck)")
@@ -1927,7 +3278,7 @@ class InstallModlistScreen(QWidget):
                     self._current_resolution = resolution
             else:
                 self._current_resolution = None
-            
+
             # Use automated prefix creation instead of manual steps
             debug_print("DEBUG: Starting automated prefix creation workflow")
             self._safe_append_text("Starting automated prefix creation workflow...")
@@ -1983,6 +3334,8 @@ class InstallModlistScreen(QWidget):
                         f"ModOrganizer.exe not found at:\n{final_exe_path}\n\nCannot proceed with automated setup.")
                     return
             
+            self._begin_post_install_feedback()
+
             # Run automated prefix creation in separate thread
             from PySide6.QtCore import QThread, Signal
             
@@ -2107,6 +3460,7 @@ class InstallModlistScreen(QWidget):
                     "Automated prefix creation failed. Please check the console output for details.")
                 # Re-enable controls on failure
                 self._enable_controls_after_operation()
+                self._end_post_install_feedback(success=False)
         finally:
             # Always ensure controls are re-enabled when workflow truly completes
             pass
@@ -2118,14 +3472,17 @@ class InstallModlistScreen(QWidget):
             f"Error during automated prefix creation: {error_msg}")
         # Re-enable controls on error
         self._enable_controls_after_operation()
+        self._end_post_install_feedback(success=False)
     
     def on_automated_prefix_progress(self, progress_msg):
         """Handle progress updates from automated prefix creation"""
         self._safe_append_text(progress_msg)
+        self._handle_post_install_progress(progress_msg)
     
     def on_configuration_progress(self, progress_msg):
         """Handle progress updates from modlist configuration"""
         self._safe_append_text(progress_msg)
+        self._handle_post_install_progress(progress_msg)
     
     def show_steam_restart_progress(self, message):
         """Show Steam restart progress dialog"""
@@ -2154,8 +3511,11 @@ class InstallModlistScreen(QWidget):
     def on_configuration_complete(self, success, message, modlist_name):
         """Handle configuration completion on main thread"""
         try:
+            # Stop CPU tracking now that everything is complete
+            self.file_progress_list.stop_cpu_tracking()
             # Re-enable controls now that installation/configuration is complete
             self._enable_controls_after_operation()
+            self._end_post_install_feedback(success)
             
             if success:
                 # Check if we need to show Somnium guidance
@@ -2189,12 +3549,15 @@ class InstallModlistScreen(QWidget):
                         self,
                         "Install TTW?",
                         f"{modlist_name} requires Tale of Two Wastelands!\n\n"
-                        "Would you like to install and configure TTW automatically now?\n\n"
+                        "Would you like to install TTW now?\n\n"
                         "This will:\n"
                         "• Guide you through TTW installation\n"
-                        "• Automatically integrate TTW into your modlist\n"
-                        "• Configure load order correctly\n\n"
-                        "Note: TTW installation can take a while. You can also install TTW later from Additional Tasks & Tools.",
+                        "• Attempt to integrate TTW into your modlist automatically\n"
+                        "• Configure load order if integration is supported\n\n"
+                        "Note: Automatic integration works for some modlists (like Begin Again). "
+                        "Other modlists may require manual TTW setup. "
+                        "TTW installation can take a while.\n\n"
+                        "You can also install TTW later from Additional Tasks & Tools.",
                         critical=False,
                         safety_level="medium"
                     )
@@ -2203,6 +3566,9 @@ class InstallModlistScreen(QWidget):
                         # Navigate to TTW screen
                         self._initiate_ttw_workflow(modlist_name, install_dir)
                         return  # Don't show success dialog yet, will show after TTW completes
+
+                # Clear Activity window before showing success dialog
+                self.file_progress_list.clear()
 
                 # Show normal success dialog
                 success_dialog = SuccessDialog(
@@ -2860,40 +4226,57 @@ class InstallModlistScreen(QWidget):
         
         if reply == QMessageBox.Yes:
             self._safe_append_text("\n🛑 Cancelling installation...")
-            
-            # Cancel the installation thread if it exists
-            if hasattr(self, 'install_thread') and self.install_thread.isRunning():
-                self.install_thread.cancel()
-                self.install_thread.wait(3000)  # Wait up to 3 seconds for graceful shutdown
-                if self.install_thread.isRunning():
-                    self.install_thread.terminate()  # Force terminate if needed
-                    self.install_thread.wait(1000)
-            
-            # Cancel the automated prefix thread if it exists
-            if hasattr(self, 'prefix_thread') and self.prefix_thread.isRunning():
-                self.prefix_thread.terminate()
-                self.prefix_thread.wait(3000)  # Wait up to 3 seconds for graceful shutdown
-                if self.prefix_thread.isRunning():
-                    self.prefix_thread.terminate()  # Force terminate if needed
-                    self.prefix_thread.wait(1000)
-            
-            # Cancel the configuration thread if it exists
-            if hasattr(self, 'config_thread') and self.config_thread.isRunning():
-                self.config_thread.terminate()
-                self.config_thread.wait(3000)  # Wait up to 3 seconds for graceful shutdown
-                if self.config_thread.isRunning():
-                    self.config_thread.terminate()  # Force terminate if needed
-                    self.config_thread.wait(1000)
-            
-            # Cleanup any remaining processes
-            self.cleanup_processes()
-            
-            # Reset button states and re-enable all controls
-            self._enable_controls_after_operation()
-            self.cancel_btn.setVisible(True)
-            self.cancel_install_btn.setVisible(False)
-            
-            self._safe_append_text("Installation cancelled by user.")
+
+            # Set flag so we can detect cancellation reliably
+            self._cancellation_requested = True
+
+            try:
+                # Clear Active Files window and reset progress indicator
+                if hasattr(self, 'file_progress_list'):
+                    self.file_progress_list.clear()
+                if hasattr(self, 'progress_indicator'):
+                    self.progress_indicator.reset()
+
+                # Cancel the installation thread if it exists
+                if hasattr(self, 'install_thread') and self.install_thread and self.install_thread.isRunning():
+                    self.install_thread.cancel()
+                    self.install_thread.wait(3000)  # Wait up to 3 seconds for graceful shutdown
+                    if self.install_thread.isRunning():
+                        self.install_thread.terminate()  # Force terminate if needed
+                        self.install_thread.wait(1000)
+
+                # Cancel the automated prefix thread if it exists
+                if hasattr(self, 'prefix_thread') and self.prefix_thread and self.prefix_thread.isRunning():
+                    self.prefix_thread.terminate()
+                    self.prefix_thread.wait(3000)  # Wait up to 3 seconds for graceful shutdown
+                    if self.prefix_thread.isRunning():
+                        self.prefix_thread.terminate()  # Force terminate if needed
+                        self.prefix_thread.wait(1000)
+
+                # Cancel the configuration thread if it exists
+                if hasattr(self, 'config_thread') and self.config_thread and self.config_thread.isRunning():
+                    self.config_thread.terminate()
+                    self.config_thread.wait(3000)  # Wait up to 3 seconds for graceful shutdown
+                    if self.config_thread.isRunning():
+                        self.config_thread.terminate()  # Force terminate if needed
+                        self.config_thread.wait(1000)
+
+                # Cleanup any remaining processes
+                self.cleanup_processes()
+
+                # Reset button states and re-enable all controls
+                self._enable_controls_after_operation()
+                self.cancel_btn.setVisible(True)
+                self.cancel_install_btn.setVisible(False)
+
+            except Exception as e:
+                debug_print(f"ERROR: Exception during cancellation cleanup: {e}")
+                import traceback
+                traceback.print_exc()
+
+            finally:
+                # Always write cancellation message to console so detection works
+                self._safe_append_text("Installation cancelled by user.")
 
     def _show_somnium_post_install_guidance(self):
         """Show guidance popup for Somnium post-installation steps"""

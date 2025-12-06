@@ -25,7 +25,6 @@ from .commands.install_modlist import InstallModlistCommand
 # Import our menu handlers
 from .menus.main_menu import MainMenuHandler
 from .menus.wabbajack_menu import WabbajackMenuHandler
-from .menus.hoolamike_menu import HoolamikeMenuHandler
 from .menus.additional_menu import AdditionalMenuHandler
 
 # Import backend handlers for legacy compatibility
@@ -59,10 +58,18 @@ class JackifyCLI:
         
         # Configure logging to be quiet by default - will be adjusted after arg parsing
         self._configure_logging_early()
-        
-        # Determine system info
-        self.system_info = SystemInfo(is_steamdeck=self._is_steamdeck())
-        
+
+        # Detect Steam installation types once at startup
+        from ...shared.steam_utils import detect_steam_installation_types
+        is_flatpak, is_native = detect_steam_installation_types()
+
+        # Determine system info with Steam detection
+        self.system_info = SystemInfo(
+            is_steamdeck=self._is_steamdeck(),
+            is_flatpak_steam=is_flatpak,
+            is_native_steam=is_native
+        )
+
         # Apply resource limits for optimal operation
         self._apply_resource_limits()
         
@@ -290,7 +297,6 @@ class JackifyCLI:
         menus = {
             'main': MainMenuHandler(dev_mode=getattr(self, 'dev_mode', False)),
             'wabbajack': WabbajackMenuHandler(),
-            'hoolamike': HoolamikeMenuHandler(),
             'additional': AdditionalMenuHandler()
         }
         
@@ -419,9 +425,6 @@ class JackifyCLI:
         elif command == "install-wabbajack":
             # Legacy functionality - TODO: extract to command handler
             return self._handle_legacy_install_wabbajack()
-        elif command == "hoolamike":
-            # Legacy functionality - TODO: extract to command handler
-            return self._handle_legacy_hoolamike()
         elif command == "install-mo2":
             print("MO2 installation not yet implemented")
             print("This functionality is coming soon!")
@@ -495,9 +498,6 @@ class JackifyCLI:
         print("Install Wabbajack functionality not yet migrated to new structure")
         return 1
     
-    def _handle_legacy_hoolamike(self):
-        """Handle hoolamike command (legacy functionality)"""
-        print("Hoolamike functionality not yet migrated to new structure")
         return 1
     
     def _handle_legacy_recovery(self, args):

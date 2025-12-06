@@ -1,11 +1,15 @@
 """
 ConfigureNewModlistScreen for Jackify GUI
 """
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QGridLayout, QFileDialog, QTextEdit, QSizePolicy, QTabWidget, QDialog, QListWidget, QListWidgetItem, QMessageBox, QProgressDialog, QCheckBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QGridLayout, QFileDialog, QTextEdit, QSizePolicy, QTabWidget, QDialog, QListWidget, QListWidgetItem, QMessageBox, QProgressDialog, QCheckBox, QMainWindow
 from PySide6.QtCore import Qt, QSize, QThread, Signal, QTimer, QProcess, QMetaObject
 from PySide6.QtGui import QPixmap, QTextCursor
 from ..shared_theme import JACKIFY_COLOR_BLUE, DEBUG_BORDERS
-from ..utils import ansi_to_html
+from ..utils import ansi_to_html, set_responsive_minimum
+# Progress reporting components
+from jackify.frontends.gui.widgets.progress_indicator import OverallProgressIndicator
+from jackify.frontends.gui.widgets.file_progress_list import FileProgressList
+from jackify.shared.progress_models import InstallationPhase, InstallationProgress
 import os
 import subprocess
 import sys
@@ -44,17 +48,24 @@ class ModlistFetchThread(QThread):
         self.install_dir = install_dir
         self.download_dir = download_dir
     def run(self):
+        # CRITICAL: Use safe Python executable to prevent AppImage recursive spawning
+        from jackify.backend.handlers.subprocess_utils import get_safe_python_executable
+        python_exe = get_safe_python_executable()
+        
         if self.mode == 'list-modlists':
-            cmd = [sys.executable, self.cli_path, '--install-modlist', '--list-modlists', '--game-type', self.game_type]
+            cmd = [python_exe, self.cli_path, '--install-modlist', '--list-modlists', '--game-type', self.game_type]
         elif self.mode == 'install':
-            cmd = [sys.executable, self.cli_path, '--install-modlist', '--install', '--modlist-name', self.modlist_name, '--install-dir', self.install_dir, '--download-dir', self.download_dir, '--game-type', self.game_type]
+            cmd = [python_exe, self.cli_path, '--install-modlist', '--install', '--modlist-name', self.modlist_name, '--install-dir', self.install_dir, '--download-dir', self.download_dir, '--game-type', self.game_type]
         else:
             self.result.emit([], '[ModlistFetchThread] Unknown mode')
             return
         try:
             with open(self.log_path, 'a') as logf:
                 logf.write(f"\n[Modlist Fetch CMD] {cmd}\n")
-                proc = subprocess.Popen(cmd, cwd=self.project_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                # Use clean subprocess environment to prevent AppImage variable inheritance
+                from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
+                env = get_clean_subprocess_env()
+                proc = subprocess.Popen(cmd, cwd=self.project_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
                 stdout, stderr = proc.communicate()
                 logf.write(f"[stdout]\n{stdout}\n[stderr]\n{stderr}\n")
                 if proc.returncode == 0:
@@ -112,9 +123,20 @@ class ConfigureNewModlistScreen(QWidget):
         # Scroll tracking for professional auto-scroll behavior
         self._user_manually_scrolled = False
         self._was_at_bottom = True
-        
+
         # Time tracking for workflow completion
         self._workflow_start_time = None
+
+        # Initialize progress reporting components
+        self.progress_indicator = OverallProgressIndicator(show_progress_bar=True)
+        self.progress_indicator.set_status("Ready to configure", 0)
+        self.file_progress_list = FileProgressList()
+
+        # Create "Show Details" checkbox
+        self.show_details_checkbox = QCheckBox("Show details")
+        self.show_details_checkbox.setChecked(False)  # Start collapsed
+        self.show_details_checkbox.setToolTip("Toggle between activity summary and detailed console output")
+        self.show_details_checkbox.toggled.connect(self._on_show_details_toggled)
 
         main_overall_vbox = QVBoxLayout(self)
         main_overall_vbox.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
@@ -271,79 +293,104 @@ class ConfigureNewModlistScreen(QWidget):
         self.start_btn = QPushButton("Start Configuration")
         btn_row.addWidget(self.start_btn)
         cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.go_back)
+        cancel_btn.clicked.connect(self.cancel_and_cleanup)
         btn_row.addWidget(cancel_btn)
         user_config_widget = QWidget()
         user_config_widget.setLayout(user_config_vbox)
         if self.debug:
             user_config_widget.setStyleSheet("border: 2px solid orange;")
             user_config_widget.setToolTip("USER_CONFIG_WIDGET")
-        # Right: process monitor (as before)
+        # Right: Activity window (FileProgressList widget)
+        # Fixed size policy to prevent shrinking when window expands
+        self.file_progress_list.setMinimumSize(QSize(300, 20))
+        self.file_progress_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        activity_widget = QWidget()
+        activity_layout = QVBoxLayout()
+        activity_layout.setContentsMargins(0, 0, 0, 0)
+        activity_layout.setSpacing(0)
+        activity_layout.addWidget(self.file_progress_list)
+        activity_widget.setLayout(activity_layout)
+        if self.debug:
+            activity_widget.setStyleSheet("border: 2px solid purple;")
+            activity_widget.setToolTip("ACTIVITY_WINDOW")
+        upper_hbox.addWidget(user_config_widget, stretch=11)
+        upper_hbox.addWidget(activity_widget, stretch=9)
+
+        # Keep legacy process monitor hidden (for compatibility with existing code)
         self.process_monitor = QTextEdit()
         self.process_monitor.setReadOnly(True)
-        self.process_monitor.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        self.process_monitor.setMinimumSize(QSize(300, 20))
-        self.process_monitor.setStyleSheet(f"background: #222; color: {JACKIFY_COLOR_BLUE}; font-family: monospace; font-size: 11px; border: 1px solid #444;")
-        self.process_monitor_heading = QLabel("<b>[Process Monitor]</b>")
-        self.process_monitor_heading.setStyleSheet(f"color: {JACKIFY_COLOR_BLUE}; font-size: 13px; margin-bottom: 2px;")
-        self.process_monitor_heading.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        process_vbox = QVBoxLayout()
-        process_vbox.setContentsMargins(0, 0, 0, 0)
-        process_vbox.setSpacing(2)
-        process_vbox.addWidget(self.process_monitor_heading)
-        process_vbox.addWidget(self.process_monitor)
-        process_monitor_widget = QWidget()
-        process_monitor_widget.setLayout(process_vbox)
-        if self.debug:
-            process_monitor_widget.setStyleSheet("border: 2px solid purple;")
-            process_monitor_widget.setToolTip("PROCESS_MONITOR")
-        upper_hbox.addWidget(user_config_widget, stretch=11)
-        upper_hbox.addWidget(process_monitor_widget, stretch=9)
+        self.process_monitor.setVisible(False)  # Hidden in compact mode
         upper_hbox.setAlignment(Qt.AlignTop)
         upper_section_widget = QWidget()
         upper_section_widget.setLayout(upper_hbox)
+        # Use Fixed size policy for consistent height
+        upper_section_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         upper_section_widget.setMaximumHeight(280)  # Increased to show resolution dropdown
         if self.debug:
             upper_section_widget.setStyleSheet("border: 2px solid green;")
             upper_section_widget.setToolTip("UPPER_SECTION")
         main_overall_vbox.addWidget(upper_section_widget)
-        # Remove spacing - console should expand to fill available space
-        # --- Console output area (full width, placeholder for now) ---
+
+        # Status banner with progress indicator and "Show details" toggle
+        banner_row = QHBoxLayout()
+        banner_row.setContentsMargins(0, 0, 0, 0)
+        banner_row.setSpacing(8)
+        banner_row.addWidget(self.progress_indicator, 1)
+        banner_row.addStretch()
+        banner_row.addWidget(self.show_details_checkbox)
+        banner_row_widget = QWidget()
+        banner_row_widget.setLayout(banner_row)
+        banner_row_widget.setMaximumHeight(45)  # Compact height
+        banner_row_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        main_overall_vbox.addWidget(banner_row_widget)
+
+        # Console output area (shown when "Show details" is checked)
         self.console = QTextEdit()
         self.console.setReadOnly(True)
         self.console.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        self.console.setMinimumHeight(50)   # Very small minimum - can shrink to almost nothing
-        self.console.setMaximumHeight(1000) # Allow growth when space available
+        self.console.setMinimumHeight(50)
+        self.console.setMaximumHeight(1000)
         self.console.setFontFamily('monospace')
+        self.console.setVisible(False)  # Hidden by default (compact mode)
         if self.debug:
             self.console.setStyleSheet("border: 2px solid yellow;")
             self.console.setToolTip("CONSOLE")
-        
+
         # Set up scroll tracking for professional auto-scroll behavior
         self._setup_scroll_tracking()
-        
+
         # Wrap button row in widget for debug borders
         btn_row_widget = QWidget()
         btn_row_widget.setLayout(btn_row)
-        btn_row_widget.setMaximumHeight(50)  # Limit height to make it more compact
+        btn_row_widget.setMaximumHeight(50)
         if self.debug:
             btn_row_widget.setStyleSheet("border: 2px solid red;")
             btn_row_widget.setToolTip("BUTTON_ROW")
-        
+
         # Create a container that holds console + button row with proper spacing
         console_and_buttons_widget = QWidget()
         console_and_buttons_layout = QVBoxLayout()
         console_and_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        console_and_buttons_layout.setSpacing(8)  # Small gap between console and buttons
-        
-        console_and_buttons_layout.addWidget(self.console, stretch=1)  # Console fills most space
-        console_and_buttons_layout.addWidget(btn_row_widget)  # Buttons at bottom of this container
-        
+        console_and_buttons_layout.setSpacing(8)
+
+        console_and_buttons_layout.addWidget(self.console, stretch=1)
+        console_and_buttons_layout.addWidget(btn_row_widget)
+
         console_and_buttons_widget.setLayout(console_and_buttons_layout)
+        console_and_buttons_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        console_and_buttons_widget.setFixedHeight(50)  # Lock to button row height when console is hidden
         if self.debug:
             console_and_buttons_widget.setStyleSheet("border: 2px solid lightblue;")
             console_and_buttons_widget.setToolTip("CONSOLE_AND_BUTTONS_CONTAINER")
-        main_overall_vbox.addWidget(console_and_buttons_widget, stretch=1)  # This container fills remaining space
+        # Add without stretch to prevent squashing upper section
+        main_overall_vbox.addWidget(console_and_buttons_widget)
+
+        # Store references for toggle functionality
+        self.console_and_buttons_widget = console_and_buttons_widget
+        self.console_and_buttons_layout = console_and_buttons_layout
+        self.main_overall_vbox = main_overall_vbox
+
         self.setLayout(main_overall_vbox)
 
         # --- Process Monitor (right) ---
@@ -442,6 +489,87 @@ class ConfigureNewModlistScreen(QWidget):
         if scrollbar.value() >= scrollbar.maximum() - 1:
             self._user_manually_scrolled = False
 
+    def _on_show_details_toggled(self, checked):
+        """Handle Show Details checkbox toggle"""
+        self._toggle_console_visibility(checked)
+
+    def _toggle_console_visibility(self, is_checked):
+        """Toggle console visibility and window size"""
+        main_window = None
+        try:
+            parent = self.parent()
+            while parent and not isinstance(parent, QMainWindow):
+                parent = parent.parent()
+            if parent and isinstance(parent, QMainWindow):
+                main_window = parent
+        except Exception:
+            pass
+
+        if is_checked:
+            # Show console
+            self.console.setVisible(True)
+            self.console.setMinimumHeight(200)
+            self.console.setMaximumHeight(16777215)
+            self.console.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+            # Allow expansion when console is visible
+            if hasattr(self, 'console_and_buttons_widget'):
+                self.console_and_buttons_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                self.console_and_buttons_widget.setMinimumHeight(0)
+                self.console_and_buttons_widget.setMaximumHeight(16777215)
+                self.console_and_buttons_widget.updateGeometry()
+
+            # Stop CPU tracking when showing console
+            self.file_progress_list.stop_cpu_tracking()
+
+            # Expand window
+            if main_window:
+                try:
+                    from PySide6.QtCore import QSize
+                    # On Steam Deck, keep fullscreen; on other systems, set normal window state
+                    if not (hasattr(main_window, 'system_info') and main_window.system_info.is_steamdeck):
+                        main_window.showNormal()
+                    main_window.setMaximumHeight(16777215)
+                    main_window.setMinimumHeight(0)
+                    expanded_min = 900
+                    current_size = main_window.size()
+                    target_height = max(expanded_min, 900)
+                    main_window.setMinimumHeight(expanded_min)
+                    main_window.resize(current_size.width(), target_height)
+                    self.main_overall_vbox.invalidate()
+                    self.updateGeometry()
+                except Exception:
+                    pass
+        else:
+            # Hide console
+            self.console.setVisible(False)
+            self.console.setMinimumHeight(0)
+            self.console.setMaximumHeight(0)
+            self.console.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+
+            # Lock height when console is hidden
+            if hasattr(self, 'console_and_buttons_widget'):
+                self.console_and_buttons_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                self.console_and_buttons_widget.setFixedHeight(50)
+                self.console_and_buttons_widget.updateGeometry()
+
+            # CPU tracking will start when user clicks "Start Configuration", not here
+            # (Removed to avoid blocking showEvent)
+
+            # Collapse window
+            if main_window:
+                try:
+                    from PySide6.QtCore import QSize
+                    # Only set minimum size - DO NOT RESIZE
+                    # On Steam Deck, keep fullscreen; on other systems, set normal window state
+                    if not (hasattr(main_window, 'system_info') and main_window.system_info.is_steamdeck):
+                        main_window.showNormal()
+                    main_window.setMaximumSize(QSize(16777215, 16777215))
+                    set_responsive_minimum(main_window, min_width=960, min_height=420)
+                    # DO NOT resize - let window stay at current size
+                except Exception:
+                    pass
+
     def _safe_append_text(self, text):
         """Append text with professional auto-scroll behavior"""
         # Write all messages to log file
@@ -480,8 +608,61 @@ class ConfigureNewModlistScreen(QWidget):
             self.install_dir_edit.setText(file)
 
     def go_back(self):
+        """Navigate back to main menu and restore window size"""
+        # Emit collapse signal to restore compact mode
+        self.resize_request.emit('collapse')
+
+        # Restore window size before navigating away
+        try:
+            main_window = self.window()
+            if main_window:
+                from PySide6.QtCore import QSize
+                from ..utils import apply_window_size_and_position
+
+                # Only set minimum size - DO NOT RESIZE
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                set_responsive_minimum(main_window, min_width=960, min_height=420)
+                # DO NOT resize - let window stay at current size
+        except Exception:
+            pass
+
         if self.stacked_widget:
             self.stacked_widget.setCurrentIndex(self.main_menu_index)
+
+    def cleanup_processes(self):
+        """Clean up any running processes when the window closes or is cancelled"""
+        # Stop CPU tracking if active
+        if hasattr(self, 'file_progress_list'):
+            self.file_progress_list.stop_cpu_tracking()
+
+        # Clean up configuration thread if running
+        if hasattr(self, 'config_thread') and self.config_thread.isRunning():
+            self.config_thread.terminate()
+            self.config_thread.wait(1000)
+
+    def cancel_and_cleanup(self):
+        """Handle Cancel button - clean up processes and go back"""
+        self.cleanup_processes()
+        self.go_back()
+
+    def showEvent(self, event):
+        """Called when the widget becomes visible - ensure collapsed state"""
+        super().showEvent(event)
+
+        # Ensure initial collapsed layout each time this screen is opened
+        try:
+            from PySide6.QtCore import Qt as _Qt
+            # Ensure checkbox is unchecked without emitting signals
+            if self.show_details_checkbox.isChecked():
+                self.show_details_checkbox.blockSignals(True)
+                self.show_details_checkbox.setChecked(False)
+                self.show_details_checkbox.blockSignals(False)
+            
+            # Force collapsed state
+            self._toggle_console_visibility(False)
+        except Exception as e:
+            # If initial collapse fails, log but don't crash
+            print(f"Warning: Failed to set initial collapsed state: {e}")
 
     def update_top_panel(self):
         try:
@@ -528,6 +709,9 @@ class ConfigureNewModlistScreen(QWidget):
     def _check_protontricks(self):
         """Check if protontricks is available before critical operations"""
         try:
+            if self.protontricks_service.is_bundled_mode():
+                return True
+
             is_installed, installation_type, details = self.protontricks_service.detect_protontricks()
             
             if not is_installed:
@@ -582,7 +766,13 @@ class ConfigureNewModlistScreen(QWidget):
         
         # Start time tracking
         self._workflow_start_time = time.time()
-        
+
+        # Initialize progress indicator
+        self.progress_indicator.set_status("Preparing to configure...", 0)
+
+        # Start CPU tracking
+        self.file_progress_list.start_cpu_tracking()
+
         # Disable controls during configuration (after validation passes)
         self._disable_controls_during_operation()
         
@@ -1251,7 +1441,10 @@ class ConfigureNewModlistScreen(QWidget):
         if success:
             # Calculate time taken
             time_taken = self._calculate_time_taken()
-            
+
+            # Clear Activity window before showing success dialog
+            self.file_progress_list.clear()
+
             # Show success dialog with celebration
             success_dialog = SuccessDialog(
                 modlist_name=modlist_name,

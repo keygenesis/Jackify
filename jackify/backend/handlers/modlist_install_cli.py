@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__) # Standard logger init
 # Helper function to get path to jackify-install-engine
 def get_jackify_engine_path():
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        # Running in a PyInstaller bundle
+        # Running inside the bundled AppImage (frozen)
         # Engine is expected at <bundle_root>/jackify/engine/jackify-engine
         return os.path.join(sys._MEIPASS, 'jackify', 'engine', 'jackify-engine')
     else:
@@ -408,51 +408,76 @@ class ModlistInstallCLI:
             self.context['download_dir'] = download_dir_path
         self.logger.debug(f"Download directory context set to: {self.context['download_dir']}")
         
-        # 5. Prompt for Nexus API key (skip if in context)
+        # 5. Get Nexus authentication (OAuth or API key)
         if 'nexus_api_key' not in self.context:
-            from jackify.backend.services.api_key_service import APIKeyService
-            api_key_service = APIKeyService()
-            saved_key = api_key_service.get_saved_api_key()
-            api_key = None
-            if saved_key:
-                print("\n" + "-" * 28)
-                print(f"{COLOR_INFO}A Nexus API Key is already saved.{COLOR_RESET}")
-                use_saved = input(f"{COLOR_PROMPT}Use the saved API key? [Y/n]: {COLOR_RESET}").strip().lower()
-                if use_saved in ('', 'y', 'yes'):
-                    api_key = saved_key
+            from jackify.backend.services.nexus_auth_service import NexusAuthService
+            auth_service = NexusAuthService()
+
+            # Get current auth status
+            authenticated, method, username = auth_service.get_auth_status()
+
+            if authenticated:
+                # Already authenticated - use existing auth
+                if method == 'oauth':
+                    print("\n" + "-" * 28)
+                    print(f"{COLOR_SUCCESS}Nexus Authentication: Authorized via OAuth{COLOR_RESET}")
+                    if username:
+                        print(f"{COLOR_INFO}Logged in as: {username}{COLOR_RESET}")
+                elif method == 'api_key':
+                    print("\n" + "-" * 28)
+                    print(f"{COLOR_INFO}Nexus Authentication: Using API Key (Legacy){COLOR_RESET}")
+
+                # Get valid token/key
+                api_key = auth_service.ensure_valid_auth()
+                if api_key:
+                    self.context['nexus_api_key'] = api_key
                 else:
-                    new_key = input(f"{COLOR_PROMPT}Enter a new Nexus API Key (or press Enter to keep the saved one): {COLOR_RESET}").strip()
-                    if new_key:
-                        api_key = new_key
-                        replace = input(f"{COLOR_PROMPT}Replace the saved key with this one? [y/N]: {COLOR_RESET}").strip().lower()
-                        if replace == 'y':
-                            if api_key_service.save_api_key(api_key):
-                                print(f"{COLOR_SUCCESS}API key saved successfully.{COLOR_RESET}")
-                            else:
-                                print(f"{COLOR_WARNING}Failed to save API key. Using for this session only.{COLOR_RESET}")
+                    # Auth expired or invalid - prompt to set up
+                    print(f"\n{COLOR_WARNING}Your authentication has expired or is invalid.{COLOR_RESET}")
+                    authenticated = False
+
+            if not authenticated:
+                # Not authenticated - offer to set up OAuth
+                print("\n" + "-" * 28)
+                print(f"{COLOR_WARNING}Nexus Mods authentication is required for downloading mods.{COLOR_RESET}")
+                print(f"\n{COLOR_PROMPT}Would you like to authorize with Nexus now?{COLOR_RESET}")
+                print(f"{COLOR_INFO}This will open your browser for secure OAuth authorization.{COLOR_RESET}")
+
+                authorize = input(f"{COLOR_PROMPT}Authorize now? [Y/n]: {COLOR_RESET}").strip().lower()
+
+                if authorize in ('', 'y', 'yes'):
+                    # Launch OAuth authorization
+                    print(f"\n{COLOR_INFO}Starting OAuth authorization...{COLOR_RESET}")
+                    print(f"{COLOR_WARNING}Your browser will open shortly.{COLOR_RESET}")
+                    print(f"{COLOR_INFO}Note: Your browser may ask permission to open 'xdg-open' or{COLOR_RESET}")
+                    print(f"{COLOR_INFO}Jackify's protocol handler - please click 'Open' or 'Allow'.{COLOR_RESET}")
+
+                    def show_message(msg):
+                        print(f"\n{COLOR_INFO}{msg}{COLOR_RESET}")
+
+                    success = auth_service.authorize_oauth(show_browser_message_callback=show_message)
+
+                    if success:
+                        print(f"\n{COLOR_SUCCESS}OAuth authorization successful!{COLOR_RESET}")
+                        _, _, username = auth_service.get_auth_status()
+                        if username:
+                            print(f"{COLOR_INFO}Authorized as: {username}{COLOR_RESET}")
+
+                        api_key = auth_service.ensure_valid_auth()
+                        if api_key:
+                            self.context['nexus_api_key'] = api_key
                         else:
-                            print(f"{COLOR_INFO}Using new key for this session only. Saved key unchanged.{COLOR_RESET}")
+                            print(f"{COLOR_ERROR}Failed to retrieve auth token after authorization.{COLOR_RESET}")
+                            return None
                     else:
-                        api_key = saved_key
-            else:
-                print("\n" + "-" * 28)
-                print(f"{COLOR_INFO}A Nexus Mods API key is required for downloading mods.{COLOR_RESET}")
-                print(f"{COLOR_INFO}You can get your personal key at: {COLOR_SELECTION}https://www.nexusmods.com/users/myaccount?tab=api{COLOR_RESET}")
-                print(f"{COLOR_WARNING}Your API Key is NOT saved locally. It is used only for this session unless you choose to save it.{COLOR_RESET}")
-                api_key = input(f"{COLOR_PROMPT}Enter Nexus API Key (or 'q' to cancel): {COLOR_RESET}").strip()
-                if not api_key or api_key.lower() == 'q':
-                    self.logger.info("User cancelled or provided no API key.")
-                    return None
-                save = input(f"{COLOR_PROMPT}Would you like to save this API key for future use? [y/N]: {COLOR_RESET}").strip().lower()
-                if save == 'y':
-                    if api_key_service.save_api_key(api_key):
-                        print(f"{COLOR_SUCCESS}API key saved successfully.{COLOR_RESET}")
-                    else:
-                        print(f"{COLOR_WARNING}Failed to save API key. Using for this session only.{COLOR_RESET}")
+                        print(f"\n{COLOR_ERROR}OAuth authorization failed.{COLOR_RESET}")
+                        return None
                 else:
-                    print(f"{COLOR_INFO}Using API key for this session only. It will not be saved.{COLOR_RESET}")
-            self.context['nexus_api_key'] = api_key
-        self.logger.debug(f"NEXUS_API_KEY is set in environment for engine (presence check).")
+                    # User declined OAuth - cancelled
+                    print(f"\n{COLOR_INFO}Authorization required to proceed. Installation cancelled.{COLOR_RESET}")
+                    self.logger.info("User declined Nexus authorization.")
+                    return None
+        self.logger.debug(f"Nexus authentication configured for engine.")
 
         # Display summary and confirm
         self._display_summary() # Ensure this method exists or implement it
@@ -501,11 +526,23 @@ class ModlistInstallCLI:
         if isinstance(download_dir_display, tuple):
             download_dir_display = download_dir_display[0] # Get the Path object from (Path, bool)
         print(f"Download Directory: {download_dir_display}")
-        
-        if self.context.get('nexus_api_key'):
-            print(f"Nexus API Key: [SET]")
+
+        # Show authentication method
+        from jackify.backend.services.nexus_auth_service import NexusAuthService
+        auth_service = NexusAuthService()
+        authenticated, method, username = auth_service.get_auth_status()
+
+        if method == 'oauth':
+            auth_display = f"Nexus Authentication: OAuth"
+            if username:
+                auth_display += f" ({username})"
+        elif method == 'api_key':
+            auth_display = "Nexus Authentication: API Key (Legacy)"
         else:
-            print(f"Nexus API Key: [NOT SET - WILL LIKELY FAIL]")
+            # Should never reach here since we validate auth before getting to summary
+            auth_display = "Nexus Authentication: Unknown"
+
+        print(auth_display)
         print(f"{COLOR_INFO}----------------------------------------{COLOR_RESET}")
 
     def configuration_phase(self):
@@ -597,8 +634,8 @@ class ModlistInstallCLI:
             # --- End Patch ---
 
             # Build command
-            cmd = [engine_path, 'install']
-            
+            cmd = [engine_path, 'install', '--show-file-progress']
+
             # Check for debug mode and pass --debug to engine if needed
             from jackify.backend.handlers.config_handler import ConfigHandler
             config_handler = ConfigHandler()
@@ -606,7 +643,13 @@ class ModlistInstallCLI:
             if debug_mode:
                 cmd.append('--debug')
                 self.logger.info("Debug mode enabled in config - passing --debug flag to jackify-engine")
-            
+
+            # Check GPU setting and add --no-gpu flag if disabled
+            gpu_enabled = config_handler.get('enable_gpu_texture_conversion', True)
+            if not gpu_enabled:
+                cmd.append('--no-gpu')
+                self.logger.info("GPU texture conversion disabled - passing --no-gpu flag to jackify-engine")
+
             # Determine if this is a local .wabbajack file or an online modlist
             modlist_value = self.context.get('modlist_value')
             machineid = self.context.get('machineid')
@@ -667,8 +710,10 @@ class ModlistInstallCLI:
                 else:
                     self.logger.warning(f"File descriptor limit: {message}")
                 
-                # Popen now inherits the modified os.environ because env=None
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False, env=None, cwd=engine_dir)
+                # Use cleaned environment to prevent AppImage variable inheritance
+                from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
+                clean_env = get_clean_subprocess_env()
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False, env=clean_env, cwd=engine_dir)
                 
                 # Start performance monitoring for the engine process
                 # Adjust monitoring based on debug mode
@@ -1101,11 +1146,23 @@ class ModlistInstallCLI:
         if isinstance(download_dir_display, tuple):
             download_dir_display = download_dir_display[0] # Get the Path object from (Path, bool)
         print(f"Download Directory: {download_dir_display}")
-        
-        if self.context.get('nexus_api_key'):
-            print(f"Nexus API Key: [SET]")
+
+        # Show authentication method
+        from jackify.backend.services.nexus_auth_service import NexusAuthService
+        auth_service = NexusAuthService()
+        authenticated, method, username = auth_service.get_auth_status()
+
+        if method == 'oauth':
+            auth_display = f"Nexus Authentication: OAuth"
+            if username:
+                auth_display += f" ({username})"
+        elif method == 'api_key':
+            auth_display = "Nexus Authentication: API Key (Legacy)"
         else:
-            print(f"Nexus API Key: [NOT SET - WILL LIKELY FAIL]")
+            # Should never reach here since we validate auth before getting to summary
+            auth_display = "Nexus Authentication: Unknown"
+
+        print(auth_display)
         print(f"{COLOR_INFO}----------------------------------------{COLOR_RESET}")
 
     def _enhance_nexus_error(self, line: str) -> str:
@@ -1234,52 +1291,65 @@ class ModlistInstallCLI:
             print(f"\n{COLOR_INFO}Starting TTW installation workflow...{COLOR_RESET}")
 
             # Import TTW installation handler
-            from jackify.backend.handlers.hoolamike_handler import HoolamikeHandler
+            from jackify.backend.handlers.ttw_installer_handler import TTWInstallerHandler
             from jackify.backend.models.configuration import SystemInfo
+            from pathlib import Path
 
             system_info = SystemInfo()
-            hoolamike_handler = HoolamikeHandler(system_info)
+            ttw_installer_handler = TTWInstallerHandler(
+                steamdeck=system_info.is_steamdeck if hasattr(system_info, 'is_steamdeck') else False,
+                verbose=self.verbose if hasattr(self, 'verbose') else False,
+                filesystem_handler=self.filesystem_handler if hasattr(self, 'filesystem_handler') else None,
+                config_handler=self.config_handler if hasattr(self, 'config_handler') else None
+            )
 
-            # Check if Hoolamike is installed
-            is_installed, installed_version = hoolamike_handler.check_installation_status()
+            # Check if TTW_Linux_Installer is installed
+            ttw_installer_handler._check_installation()
 
-            if not is_installed:
-                print(f"{COLOR_INFO}Hoolamike (TTW installer) is not installed.{COLOR_RESET}")
-                user_input = input(f"{COLOR_PROMPT}Install Hoolamike? (yes/no): {COLOR_RESET}").strip().lower()
+            if not ttw_installer_handler.ttw_installer_installed:
+                print(f"{COLOR_INFO}TTW_Linux_Installer is not installed.{COLOR_RESET}")
+                user_input = input(f"{COLOR_PROMPT}Install TTW_Linux_Installer? (yes/no): {COLOR_RESET}").strip().lower()
 
                 if user_input not in ['yes', 'y']:
                     print(f"{COLOR_INFO}TTW installation cancelled.{COLOR_RESET}")
                     return
 
-                # Install Hoolamike
-                print(f"{COLOR_INFO}Installing Hoolamike...{COLOR_RESET}")
-                success, message = hoolamike_handler.install_hoolamike()
+                # Install TTW_Linux_Installer
+                print(f"{COLOR_INFO}Installing TTW_Linux_Installer...{COLOR_RESET}")
+                success, message = ttw_installer_handler.install_ttw_installer()
 
                 if not success:
-                    print(f"{COLOR_ERROR}Failed to install Hoolamike: {message}{COLOR_RESET}")
+                    print(f"{COLOR_ERROR}Failed to install TTW_Linux_Installer: {message}{COLOR_RESET}")
                     return
 
-                print(f"{COLOR_INFO}Hoolamike installed successfully.{COLOR_RESET}")
+                print(f"{COLOR_INFO}TTW_Linux_Installer installed successfully.{COLOR_RESET}")
 
-            # Get Hoolamike MPI path
-            mpi_path = hoolamike_handler.get_mpi_path()
-            if not mpi_path or not os.path.exists(mpi_path):
-                print(f"{COLOR_ERROR}Hoolamike MPI file not found at: {mpi_path}{COLOR_RESET}")
+            # Prompt for TTW .mpi file
+            print(f"\n{COLOR_PROMPT}TTW Installer File (.mpi){COLOR_RESET}")
+            mpi_path = input(f"{COLOR_PROMPT}Path to TTW .mpi file: {COLOR_RESET}").strip()
+            if not mpi_path:
+                print(f"{COLOR_WARNING}No .mpi file specified. Cancelling.{COLOR_RESET}")
+                return
+
+            mpi_path = Path(mpi_path).expanduser()
+            if not mpi_path.exists() or not mpi_path.is_file():
+                print(f"{COLOR_ERROR}TTW .mpi file not found: {mpi_path}{COLOR_RESET}")
                 return
 
             # Prompt for TTW installation directory
             print(f"\n{COLOR_PROMPT}TTW Installation Directory{COLOR_RESET}")
-            print(f"Default: {os.path.join(install_dir, 'TTW')}")
+            default_ttw_dir = os.path.join(install_dir, 'TTW')
+            print(f"Default: {default_ttw_dir}")
             ttw_install_dir = input(f"{COLOR_PROMPT}TTW install directory (Enter for default): {COLOR_RESET}").strip()
 
             if not ttw_install_dir:
-                ttw_install_dir = os.path.join(install_dir, "TTW")
+                ttw_install_dir = default_ttw_dir
 
-            # Run Hoolamike installation
-            print(f"\n{COLOR_INFO}Installing TTW using Hoolamike...{COLOR_RESET}")
+            # Run TTW installation
+            print(f"\n{COLOR_INFO}Installing TTW using TTW_Linux_Installer...{COLOR_RESET}")
             print(f"{COLOR_INFO}This may take a while (15-30 minutes depending on your system).{COLOR_RESET}")
 
-            success = hoolamike_handler.run_hoolamike_install(mpi_path, ttw_install_dir)
+            success, message = ttw_installer_handler.install_ttw_backend(Path(mpi_path), Path(ttw_install_dir))
 
             if success:
                 print(f"\n{COLOR_INFO}═══════════════════════════════════════════════════════════════{COLOR_RESET}")
@@ -1289,6 +1359,7 @@ class ModlistInstallCLI:
                 print(f"The modlist '{modlist_name}' is now ready to use with TTW.")
             else:
                 print(f"\n{COLOR_ERROR}TTW installation failed. Check the logs for details.{COLOR_RESET}")
+                print(f"{COLOR_ERROR}Error: {message}{COLOR_RESET}")
 
         except Exception as e:
             self.logger.error(f"Error during TTW installation: {e}", exc_info=True)

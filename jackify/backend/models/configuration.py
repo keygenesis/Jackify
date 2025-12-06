@@ -68,7 +68,9 @@ class SystemInfo:
     steam_root: Optional[Path] = None
     steam_user_id: Optional[str] = None
     proton_version: Optional[str] = None
-    
+    is_flatpak_steam: bool = False
+    is_native_steam: bool = False
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -76,4 +78,6 @@ class SystemInfo:
             'steam_root': str(self.steam_root) if self.steam_root else None,
             'steam_user_id': self.steam_user_id,
             'proton_version': self.proton_version,
+            'is_flatpak_steam': self.is_flatpak_steam,
+            'is_native_steam': self.is_native_steam,
         } 

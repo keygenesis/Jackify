@@ -285,8 +285,18 @@ class ModlistService:
                     output_callback(f"Jackify Install Engine not found or not executable at: {engine_path}")
                 return False
             
-            # Build command (copied from working code) 
-            cmd = [engine_path, 'install']
+            # Build command (copied from working code)
+            cmd = [engine_path, 'install', '--show-file-progress']
+
+            # Check GPU setting
+            from jackify.backend.handlers.config_handler import ConfigHandler
+            config_handler = ConfigHandler()
+            gpu_enabled = config_handler.get('enable_gpu_texture_conversion', True)
+            logger.info(f"GPU texture conversion setting: {gpu_enabled}")
+            if not gpu_enabled:
+                cmd.append('--no-gpu')
+                logger.info("Added --no-gpu flag to jackify-engine command")
+
             modlist_value = context.get('modlist_value')
             if modlist_value and modlist_value.endswith('.wabbajack') and os.path.isfile(modlist_value):
                 cmd += ['-w', modlist_value]
@@ -326,8 +336,10 @@ class ModlistService:
                     else:
                         output_callback(f"File descriptor limit warning: {message}")
                 
-                # Subprocess call (copied from working code)  
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False, env=None, cwd=engine_dir)
+                # Subprocess call with cleaned environment to prevent AppImage variable inheritance
+                from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
+                clean_env = get_clean_subprocess_env()
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False, env=clean_env, cwd=engine_dir)
                 
                 # Output processing (copied from working code)
                 buffer = b''

@@ -27,6 +27,7 @@ from PySide6.QtGui import QFont, QPalette, QColor, QPixmap
 # Import our GUI services
 from jackify.backend.models.configuration import SystemInfo
 from ..shared_theme import JACKIFY_COLOR_BLUE
+from ..utils import set_responsive_minimum
 
 # Constants
 DEBUG_BORDERS = False
@@ -77,8 +78,9 @@ class ModlistTasksScreen(QWidget):
         """Set up the user interface"""
         main_layout = QVBoxLayout(self)
         main_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        main_layout.setContentsMargins(50, 50, 50, 50)
-        
+        main_layout.setContentsMargins(30, 30, 30, 30)  # Reduced from 50
+        main_layout.setSpacing(12)  # Match main menu spacing
+
         if self.debug:
             self.setStyleSheet("border: 2px solid green;")
         
@@ -93,38 +95,43 @@ class ModlistTasksScreen(QWidget):
     
     def _setup_header(self, layout):
         """Set up the header section"""
+        header_widget = QWidget()
         header_layout = QVBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(2)
-        
+
         # Title
         title = QLabel("<b>Modlist Tasks</b>")
-        title.setStyleSheet(f"font-size: 24px; color: {JACKIFY_COLOR_BLUE};")
+        title.setStyleSheet(f"font-size: 20px; color: {JACKIFY_COLOR_BLUE};")
         title.setAlignment(Qt.AlignHCenter)
         header_layout.addWidget(title)
 
-        # Add a spacer to match main menu vertical spacing
-        header_layout.addSpacing(16)
-        
-        # Description  
+        header_layout.addSpacing(10)
+
+        # Description area with fixed height
         desc = QLabel(
             "Manage your modlists with native Linux tools. Choose "
-            "from the options below to install or configure modlists.<br>&nbsp;"
+            "from the options below to install or configure modlists."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #ccc;")
+        desc.setStyleSheet("color: #ccc; font-size: 13px;")
         desc.setAlignment(Qt.AlignHCenter)
+        desc.setMaximumHeight(50)  # Fixed height for description zone
         header_layout.addWidget(desc)
-        
-        header_layout.addSpacing(24)
-        
+
+        header_layout.addSpacing(12)
+
         # Separator
         sep = QLabel()
         sep.setFixedHeight(2)
         sep.setStyleSheet("background: #fff;")
         header_layout.addWidget(sep)
-        
-        header_layout.addSpacing(16)
-        layout.addLayout(header_layout)
+
+        header_layout.addSpacing(10)
+
+        header_widget.setLayout(header_layout)
+        header_widget.setFixedHeight(120)  # Fixed total header height
+        layout.addWidget(header_widget)
     
     def _setup_menu_buttons(self, layout):
         """Set up the menu buttons section"""
@@ -140,12 +147,12 @@ class ModlistTasksScreen(QWidget):
         
         # Create grid layout for buttons
         button_grid = QGridLayout()
-        button_grid.setSpacing(16)
+        button_grid.setSpacing(12)  # Reduced from 16
         button_grid.setAlignment(Qt.AlignHCenter)
-        
+
         button_width = 400
-        button_height = 50
-        
+        button_height = 40  # Reduced from 50
+
         for i, (label, action_id, description) in enumerate(MENU_ITEMS):
             # Create button
             btn = QPushButton(label)
@@ -155,8 +162,8 @@ class ModlistTasksScreen(QWidget):
                     background-color: #4a5568;
                     color: white;
                     border: none;
-                    border-radius: 8px;
-                    font-size: 14px;
+                    border-radius: 6px;
+                    font-size: 13px;
                     font-weight: bold;
                     text-align: center;
                 }}
@@ -168,11 +175,11 @@ class ModlistTasksScreen(QWidget):
                 }}
             """)
             btn.clicked.connect(lambda checked, a=action_id: self.menu_action(a))
-            
+
             # Create description label
             desc_label = QLabel(description)
             desc_label.setAlignment(Qt.AlignHCenter)
-            desc_label.setStyleSheet("color: #999; font-size: 12px;")
+            desc_label.setStyleSheet("color: #999; font-size: 11px;")  # Reduced from 12px
             desc_label.setWordWrap(True)
             desc_label.setFixedWidth(button_width)
             
@@ -208,7 +215,21 @@ class ModlistTasksScreen(QWidget):
         """Return to main menu"""
         if self.stacked_widget:
             self.stacked_widget.setCurrentIndex(self.main_menu_index)
-    
+
+    def showEvent(self, event):
+        """Called when the widget becomes visible - resize to compact size"""
+        super().showEvent(event)
+        try:
+            main_window = self.window()
+            if main_window:
+                from PySide6.QtCore import QSize
+                # Only set minimum size - DO NOT RESIZE
+                main_window.setMaximumSize(QSize(16777215, 16777215))
+                set_responsive_minimum(main_window, min_width=960, min_height=420)
+                # DO NOT resize - let window stay at current size
+        except Exception:
+            pass
+
     def cleanup(self):
         """Clean up resources when the screen is closed"""
         pass 

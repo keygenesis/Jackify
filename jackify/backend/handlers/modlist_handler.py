@@ -571,15 +571,19 @@ class ModlistHandler:
             status_callback (callable, optional): A function to call with status updates during configuration.
             manual_steps_completed (bool): If True, skip the manual steps prompt (used for new modlist flow).
         """
-        # Store status_callback for Configuration Summary
-        self._current_status_callback = status_callback
-        
-        self.logger.info("Executing configuration steps...")
-        
-        # Ensure required context is set
-        if not all([self.modlist_dir, self.appid, self.game_var, self.steamdeck is not None]):
-            self.logger.error("Cannot execute configuration steps: Missing required context (modlist_dir, appid, game_var, steamdeck status).")
-            print("Error: Missing required information to start configuration.")
+        try:
+            # Store status_callback for Configuration Summary
+            self._current_status_callback = status_callback
+            
+            self.logger.info("Executing configuration steps...")
+            
+            # Ensure required context is set
+            if not all([self.modlist_dir, self.appid, self.game_var, self.steamdeck is not None]):
+                self.logger.error("Cannot execute configuration steps: Missing required context (modlist_dir, appid, game_var, steamdeck status).")
+                print("Error: Missing required information to start configuration.")
+                return False
+        except Exception as e:
+            self.logger.error(f"Exception in _execute_configuration_steps initialization: {e}", exc_info=True)
             return False
             
         # Step 1: Set protontricks permissions
@@ -706,15 +710,18 @@ class ModlistHandler:
         target_appid = self.appid
         
         # Use user's preferred component installation method (respects settings toggle)
+        self.logger.debug(f"Getting WINEPREFIX for AppID {target_appid}...")
         wineprefix = self.protontricks_handler.get_wine_prefix_path(target_appid)
         if not wineprefix:
             self.logger.error("Failed to get WINEPREFIX path for component installation.")
             print("Error: Could not determine wine prefix location.")
             return False
+        self.logger.debug(f"WINEPREFIX obtained: {wineprefix}")
 
         # Use the winetricks handler which respects the user's toggle setting
         try:
             self.logger.info("Installing Wine components using user's preferred method...")
+            self.logger.debug(f"Calling winetricks_handler.install_wine_components with wineprefix={wineprefix}, game_var={self.game_var_full}, components={components}")
             success = self.winetricks_handler.install_wine_components(wineprefix, self.game_var_full, specific_components=components)
             if success:
                 self.logger.info("Wine component installation completed successfully")
@@ -920,16 +927,25 @@ class ModlistHandler:
             if self.steam_library and self.game_var_full:
                 vanilla_game_dir = str(Path(self.steam_library) / "steamapps" / "common" / self.game_var_full)
                 
-            if not self.path_handler.create_dxvk_conf(
+            dxvk_created = self.path_handler.create_dxvk_conf(
                 modlist_dir=self.modlist_dir, 
                 modlist_sdcard=self.modlist_sdcard, 
                 steam_library=str(self.steam_library) if self.steam_library else None, # Pass as string or None 
                 basegame_sdcard=self.basegame_sdcard, 
                 game_var_full=self.game_var_full,
-                vanilla_game_dir=vanilla_game_dir
-            ):
-                self.logger.warning("Failed to create dxvk.conf file.")
-                print("Warning: Failed to create dxvk.conf file.")
+                vanilla_game_dir=vanilla_game_dir,
+                stock_game_path=self.stock_game_path
+            )
+            dxvk_verified = self.path_handler.verify_dxvk_conf_exists(
+                modlist_dir=self.modlist_dir,
+                steam_library=str(self.steam_library) if self.steam_library else None,
+                game_var_full=self.game_var_full,
+                vanilla_game_dir=vanilla_game_dir,
+                stock_game_path=self.stock_game_path
+            )
+            if not dxvk_created or not dxvk_verified:
+                self.logger.warning("DXVK configuration file is missing or incomplete after post-install steps.")
+                print("Warning: Failed to verify dxvk.conf file (required for AMD GPUs).")
             self.logger.info("Step 10: Creating dxvk.conf... Done")
 
         # Step 11a: Small Tasks - Delete Incompatible Plugins

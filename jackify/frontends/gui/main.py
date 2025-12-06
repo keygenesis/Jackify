@@ -14,15 +14,15 @@ from pathlib import Path
 os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.qpa.*=false;*.warning=false'
 os.environ['QT_ENABLE_GLYPH_CACHE_WORKAROUND'] = '1'
 
-# Hidden diagnostic flag for debugging PyInstaller environment issues - must be first
+# Hidden diagnostic flag for debugging AppImage/bundled environment issues - must be first
 if '--env-diagnostic' in sys.argv:
     import json
     from datetime import datetime
     
-    print("PyInstaller Environment Diagnostic")
+    print("Bundled Environment Diagnostic")
     print("=" * 50)
     
-    # Check if we're in PyInstaller
+    # Check if we're running from a frozen bundle
     is_frozen = getattr(sys, 'frozen', False)
     meipass = getattr(sys, '_MEIPASS', None)
     
@@ -32,7 +32,7 @@ if '--env-diagnostic' in sys.argv:
     # Capture environment data
     env_data = {
         'timestamp': datetime.now().isoformat(),
-        'context': 'pyinstaller_internal',
+        'context': 'appimage_runtime',
         'frozen': is_frozen,
         'meipass': meipass,
         'python_executable': sys.executable,
@@ -40,13 +40,13 @@ if '--env-diagnostic' in sys.argv:
         'sys_path': sys.path,
     }
     
-    # PyInstaller-specific environment variables
-    pyinstaller_vars = {}
+    # Bundle-specific environment variables
+    bundle_vars = {}
     for key, value in os.environ.items():
-        if any(term in key.lower() for term in ['mei', 'pyinstaller', 'tmp']):
-            pyinstaller_vars[key] = value
+        if any(term in key.lower() for term in ['mei', 'appimage', 'tmp']):
+            bundle_vars[key] = value
     
-    env_data['pyinstaller_vars'] = pyinstaller_vars
+    env_data['bundle_vars'] = bundle_vars
     
     # Check LD_LIBRARY_PATH
     ld_path = os.environ.get('LD_LIBRARY_PATH', '')
@@ -55,7 +55,7 @@ if '--env-diagnostic' in sys.argv:
         env_data['ld_library_path'] = ld_path
         env_data['ld_library_path_suspicious'] = suspicious
     
-    # Try to find jackify-engine from PyInstaller context
+    # Try to find jackify-engine from bundled context
     engine_paths = []
     if meipass:
         meipass_path = Path(meipass)
@@ -71,7 +71,7 @@ if '--env-diagnostic' in sys.argv:
     
     # Save to file
     try:
-        output_file = Path.cwd() / "pyinstaller_env_capture.json"
+        output_file = Path.cwd() / "bundle_env_capture.json"
         with open(output_file, 'w') as f:
             json.dump(env_data, f, indent=2)
         print(f"\nData saved to: {output_file}")
@@ -101,10 +101,11 @@ src_dir = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(src_dir))
 
 from PySide6.QtWidgets import (
+    QSizePolicy,
     QApplication, QMainWindow, QWidget, QLabel, QVBoxLayout, QPushButton,
-    QStackedWidget, QHBoxLayout, QDialog, QFormLayout, QLineEdit, QCheckBox, QSpinBox, QMessageBox, QGroupBox, QGridLayout, QFileDialog, QToolButton, QStyle, QComboBox, QTabWidget
+    QStackedWidget, QHBoxLayout, QDialog, QFormLayout, QLineEdit, QCheckBox, QSpinBox, QMessageBox, QGroupBox, QGridLayout, QFileDialog, QToolButton, QStyle, QComboBox, QTabWidget, QRadioButton, QButtonGroup
 )
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtGui import QIcon
 import json
 
@@ -113,6 +114,9 @@ from jackify.backend.models.configuration import SystemInfo
 from jackify.backend.services.modlist_service import ModlistService
 from jackify.frontends.gui.services.message_service import MessageService
 from jackify.frontends.gui.shared_theme import DEBUG_BORDERS
+from jackify.frontends.gui.utils import get_screen_geometry, set_responsive_minimum
+
+ENABLE_WINDOW_HEIGHT_ANIMATION = False
 
 def debug_print(message):
     """Print debug message only if debug mode is enabled"""
@@ -273,36 +277,6 @@ class SettingsDialog(QDialog):
         general_layout.addWidget(dir_group)
         general_layout.addSpacing(12)
 
-        # --- Nexus API Key Section ---
-        api_group = QGroupBox("Nexus API Key")
-        api_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
-        api_layout = QHBoxLayout()
-        api_group.setLayout(api_layout)
-        self.api_key_edit = QLineEdit()
-        self.api_key_edit.setEchoMode(QLineEdit.Password)
-        api_key = self.config_handler.get_api_key()
-        if api_key:
-            self.api_key_edit.setText(api_key)
-        else:
-            self.api_key_edit.setText("")
-        self.api_key_edit.setToolTip("Your Nexus API Key (obfuscated by default, click Show to reveal)")
-        # Connect for immediate saving when text changes
-        self.api_key_edit.textChanged.connect(self._on_api_key_changed)
-        self.api_show_btn = QToolButton()
-        self.api_show_btn.setCheckable(True)
-        self.api_show_btn.setIcon(QIcon.fromTheme("view-visible"))
-        self.api_show_btn.setToolTip("Show or hide your API key")
-        self.api_show_btn.toggled.connect(self._toggle_api_key_visibility)
-        self.api_show_btn.setStyleSheet("")
-        clear_api_btn = QPushButton("Clear API Key")
-        clear_api_btn.clicked.connect(self._clear_api_key)
-        api_layout.addWidget(QLabel("Nexus API Key:"))
-        api_layout.addWidget(self.api_key_edit)
-        api_layout.addWidget(self.api_show_btn)
-        api_layout.addWidget(clear_api_btn)
-        general_layout.addWidget(api_group)
-        general_layout.addSpacing(12)
-
         # --- Proton Version Settings Section ---
         proton_group = QGroupBox("Proton Version Settings")
         proton_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
@@ -351,6 +325,34 @@ class SettingsDialog(QDialog):
         general_layout.addWidget(proton_group)
         general_layout.addSpacing(12)
 
+        # --- Nexus OAuth Section ---
+        oauth_group = QGroupBox("Nexus Authentication")
+        oauth_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
+        oauth_layout = QVBoxLayout()
+        oauth_group.setLayout(oauth_layout)
+
+        # OAuth status and button
+        oauth_status_layout = QHBoxLayout()
+        self.oauth_status_label = QLabel("Checking...")
+        self.oauth_status_label.setStyleSheet("color: #ccc;")
+
+        self.oauth_btn = QPushButton("Authorise")
+        self.oauth_btn.setMaximumWidth(100)
+        self.oauth_btn.clicked.connect(self._handle_oauth_click)
+
+        oauth_status_layout.addWidget(QLabel("Status:"))
+        oauth_status_layout.addWidget(self.oauth_status_label)
+        oauth_status_layout.addWidget(self.oauth_btn)
+        oauth_status_layout.addStretch()
+
+        oauth_layout.addLayout(oauth_status_layout)
+
+        # Update OAuth status on init
+        self._update_oauth_status()
+
+        general_layout.addWidget(oauth_group)
+        general_layout.addSpacing(12)
+
         # --- Enable Debug Section (moved to bottom as advanced option) ---
         debug_group = QGroupBox("Enable Debug")
         debug_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
@@ -371,6 +373,50 @@ class SettingsDialog(QDialog):
         """Create the Advanced settings tab"""
         advanced_tab = QWidget()
         advanced_layout = QVBoxLayout(advanced_tab)
+
+        # --- Nexus Authentication Section ---
+        auth_group = QGroupBox("Nexus Authentication")
+        auth_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
+        auth_layout = QVBoxLayout()
+        auth_group.setLayout(auth_layout)
+
+        # OAuth temporarily disabled for v0.1.8 - API key is primary auth method
+        # API Key Fallback Checkbox (hidden until OAuth re-enabled)
+        # self.api_key_fallback_checkbox = QCheckBox("Enable API Key Fallback (Legacy)")
+        # self.api_key_fallback_checkbox.setChecked(self.config_handler.get("api_key_fallback_enabled", False))
+        # self.api_key_fallback_checkbox.setToolTip("Allow using API key if OAuth fails or is unavailable (not recommended)")
+        # auth_layout.addWidget(self.api_key_fallback_checkbox)
+
+        # API Key Section
+        api_layout = QHBoxLayout()
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.Password)
+        api_key = self.config_handler.get_api_key()
+        if api_key:
+            self.api_key_edit.setText(api_key)
+        else:
+            self.api_key_edit.setText("")
+        self.api_key_edit.setToolTip("Your Nexus API Key (legacy authentication method)")
+        self.api_key_edit.textChanged.connect(self._on_api_key_changed)
+
+        self.api_show_btn = QToolButton()
+        self.api_show_btn.setCheckable(True)
+        self.api_show_btn.setIcon(QIcon.fromTheme("view-visible"))
+        self.api_show_btn.setToolTip("Show or hide your API key")
+        self.api_show_btn.toggled.connect(self._toggle_api_key_visibility)
+
+        clear_api_btn = QPushButton("Clear")
+        clear_api_btn.clicked.connect(self._clear_api_key)
+        clear_api_btn.setMaximumWidth(60)
+
+        api_layout.addWidget(QLabel("API Key:"))
+        api_layout.addWidget(self.api_key_edit)
+        api_layout.addWidget(self.api_show_btn)
+        api_layout.addWidget(clear_api_btn)
+        auth_layout.addLayout(api_layout)
+
+        advanced_layout.addWidget(auth_group)
+        advanced_layout.addSpacing(12)
 
         resource_group = QGroupBox("Resource Limits")
         resource_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
@@ -414,12 +460,14 @@ class SettingsDialog(QDialog):
 
         # Bandwidth limiter row (only show if Downloads resource exists)
         if "Downloads" in self.resource_settings:
-            downloads_throughput = self.resource_settings["Downloads"].get("MaxThroughput", 0)
+            downloads_throughput_bytes = self.resource_settings["Downloads"].get("MaxThroughput", 0)
+            # Convert bytes/s to KB/s for display
+            downloads_throughput_kb = downloads_throughput_bytes // 1024 if downloads_throughput_bytes > 0 else 0
 
             self.bandwidth_spin = QSpinBox()
             self.bandwidth_spin.setMinimum(0)
             self.bandwidth_spin.setMaximum(1000000)
-            self.bandwidth_spin.setValue(downloads_throughput)
+            self.bandwidth_spin.setValue(downloads_throughput_kb)
             self.bandwidth_spin.setSuffix(" KB/s")
             self.bandwidth_spin.setFixedWidth(160)
             self.bandwidth_spin.setToolTip("Set the maximum download speed for modlist downloads. 0 = unlimited.")
@@ -438,37 +486,80 @@ class SettingsDialog(QDialog):
 
         advanced_layout.addWidget(resource_group)
 
+        # --- GPU Texture Conversion Section ---
+        gpu_group = QGroupBox("Texture Conversion")
+        gpu_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
+        gpu_layout = QVBoxLayout()
+        gpu_group.setLayout(gpu_layout)
+
+        gpu_description = QLabel(
+            "Control whether jackify-engine uses GPU acceleration during texture conversion. "
+            "GPU acceleration significantly speeds up modlist installation but requires compatible hardware."
+        )
+        gpu_description.setWordWrap(True)
+        gpu_description.setStyleSheet("color: #ccc; font-size: 10pt;")
+        gpu_layout.addWidget(gpu_description)
+
+        self.gpu_button_group = QButtonGroup()
+        current_gpu_enabled = self.config_handler.get("enable_gpu_texture_conversion", True)
+
+        self.gpu_enabled_radio = QRadioButton("Enable GPU for Texture Conversion (default)")
+        self.gpu_enabled_radio.setToolTip("Use GPU acceleration for faster texture processing during installation.")
+        self.gpu_enabled_radio.setChecked(current_gpu_enabled)
+        self.gpu_button_group.addButton(self.gpu_enabled_radio, 0)
+        gpu_layout.addWidget(self.gpu_enabled_radio)
+
+        self.gpu_disabled_radio = QRadioButton("Disable GPU (CPU only)")
+        self.gpu_disabled_radio.setToolTip("Use CPU-only texture processing (slower but more compatible).")
+        self.gpu_disabled_radio.setChecked(not current_gpu_enabled)
+        self.gpu_button_group.addButton(self.gpu_disabled_radio, 1)
+        gpu_layout.addWidget(self.gpu_disabled_radio)
+
+        gpu_note = QLabel("Note: Disabling GPU may significantly increase installation time for large modlists.")
+        gpu_note.setStyleSheet("color: #aaa; font-size: 9pt;")
+        gpu_layout.addWidget(gpu_note)
+
+        advanced_layout.addWidget(gpu_group)
+
         # Advanced Tool Options Section
         component_group = QGroupBox("Advanced Tool Options")
         component_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
         component_layout = QVBoxLayout()
         component_group.setLayout(component_layout)
 
-        # Label for the toggle button
+        # Label for the radio buttons
         method_label = QLabel("Wine Components Installation:")
         component_layout.addWidget(method_label)
 
-        # Toggle button for winetricks/protontricks selection
-        self.component_toggle = QPushButton("Winetricks")
-        self.component_toggle.setCheckable(True)
-        use_winetricks = self.config_handler.get('use_winetricks_for_components', True)
-        self.component_toggle.setChecked(use_winetricks)
+        # Radio button group for component installation method
+        self.component_method_group = QButtonGroup()
+        component_method_layout = QVBoxLayout()
+        
+        # Get current setting
+        current_method = self.config_handler.get('component_installation_method', 'system_protontricks')
+        # Migrate old bundled_protontricks users to system_protontricks
+        if current_method == 'bundled_protontricks':
+            current_method = 'system_protontricks'
 
-        # Function to update button text based on state
-        def update_button_text():
-            if self.component_toggle.isChecked():
-                self.component_toggle.setText("Winetricks")
-            else:
-                self.component_toggle.setText("Protontricks")
-
-        self.component_toggle.toggled.connect(update_button_text)
-        update_button_text()  # Set initial text
-
-        self.component_toggle.setToolTip(
-            "Winetricks: Faster, uses bundled tools (Default)\n"
-            "Protontricks: Legacy mode, slower but system-compatible"
+        # Protontricks (default)
+        self.protontricks_radio = QRadioButton("Protontricks (Default)")
+        self.protontricks_radio.setChecked(current_method == 'system_protontricks')
+        self.protontricks_radio.setToolTip(
+            "Use system-installed protontricks (flatpak or native). Required for component installation."
         )
-        component_layout.addWidget(self.component_toggle)
+        self.component_method_group.addButton(self.protontricks_radio, 0)
+        component_method_layout.addWidget(self.protontricks_radio)
+
+        # Winetricks (alternative)
+        self.winetricks_radio = QRadioButton("Winetricks (Alternative)")
+        self.winetricks_radio.setChecked(current_method == 'winetricks')
+        self.winetricks_radio.setToolTip(
+            "Use bundled winetricks instead. May work when protontricks unavailable."
+        )
+        self.component_method_group.addButton(self.winetricks_radio, 1)
+        component_method_layout.addWidget(self.winetricks_radio)
+        
+        component_layout.addLayout(component_method_layout)
 
         advanced_layout.addWidget(component_group)
         advanced_layout.addStretch()  # Add stretch to push content to top
@@ -526,6 +617,86 @@ class SettingsDialog(QDialog):
         """Handle immediate API key saving when text changes"""
         api_key = text.strip()
         self.config_handler.save_api_key(api_key)
+
+    def _update_oauth_status(self):
+        """Update OAuth status label and button"""
+        from jackify.backend.services.nexus_auth_service import NexusAuthService
+        auth_service = NexusAuthService()
+        authenticated, method, username = auth_service.get_auth_status()
+
+        if authenticated and method == 'oauth':
+            self.oauth_status_label.setText(f"Authorised as {username}" if username else "Authorised")
+            self.oauth_status_label.setStyleSheet("color: #3fd0ea;")
+            self.oauth_btn.setText("Revoke")
+        elif method == 'oauth_expired':
+            self.oauth_status_label.setText("OAuth token expired")
+            self.oauth_status_label.setStyleSheet("color: #FFA726;")
+            self.oauth_btn.setText("Re-authorise")
+        else:
+            self.oauth_status_label.setText("Not authorised")
+            self.oauth_status_label.setStyleSheet("color: #f44336;")
+            self.oauth_btn.setText("Authorise")
+
+    def _handle_oauth_click(self):
+        """Handle OAuth button click (Authorise or Revoke)"""
+        from jackify.backend.services.nexus_auth_service import NexusAuthService
+        from jackify.frontends.gui.services.message_service import MessageService
+        from PySide6.QtWidgets import QMessageBox, QProgressDialog, QApplication
+        from PySide6.QtCore import Qt
+
+        auth_service = NexusAuthService()
+        authenticated, method, _ = auth_service.get_auth_status()
+
+        if authenticated and method == 'oauth':
+            # Revoke OAuth
+            reply = MessageService.question(self, "Revoke", "Revoke OAuth authorisation?", safety_level="low")
+            if reply == QMessageBox.Yes:
+                auth_service.revoke_oauth()
+                self._update_oauth_status()
+                MessageService.information(self, "Revoked", "OAuth authorisation has been revoked.", safety_level="low")
+        else:
+            # Authorise with OAuth
+            reply = MessageService.question(self, "Authorise with Nexus",
+                "Your browser will open for Nexus authorisation.\n\n"
+                "Note: Your browser may ask permission to open 'xdg-open'\n"
+                "or Jackify's protocol handler - please click 'Open' or 'Allow'.\n\n"
+                "Please log in and authorise Jackify when prompted.\n\n"
+                "Continue?", safety_level="low")
+
+            if reply != QMessageBox.Yes:
+                return
+
+            progress = QProgressDialog(
+                "Waiting for authorisation...\n\nPlease check your browser.",
+                "Cancel",
+                0, 0,
+                self
+            )
+            progress.setWindowTitle("Nexus OAuth")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setMinimumWidth(400)
+            progress.show()
+            QApplication.processEvents()
+
+            def show_message(msg):
+                progress.setLabelText(f"Waiting for authorisation...\n\n{msg}")
+                QApplication.processEvents()
+
+            success = auth_service.authorize_oauth(show_browser_message_callback=show_message)
+            progress.close()
+            QApplication.processEvents()
+
+            self._update_oauth_status()
+
+            if success:
+                _, _, username = auth_service.get_auth_status()
+                msg = "OAuth authorisation successful!"
+                if username:
+                    msg += f"\n\nAuthorised as: {username}"
+                MessageService.information(self, "Success", msg, safety_level="low")
+            else:
+                MessageService.warning(self, "Failed", "OAuth authorisation failed or was cancelled.", safety_level="low")
 
     def _get_proton_10_path(self):
         """Get Proton 10 path if available, fallback to auto"""
@@ -686,13 +857,17 @@ class SettingsDialog(QDialog):
             if self.bandwidth_spin:
                 if "Downloads" not in self.resource_settings:
                     self.resource_settings["Downloads"] = {"MaxTasks": 16}  # Provide default MaxTasks
-                self.resource_settings["Downloads"]["MaxThroughput"] = self.bandwidth_spin.value()
+                # Convert KB/s to bytes/s for storage (resource_settings.json expects bytes)
+                bandwidth_kb = self.bandwidth_spin.value()
+                bandwidth_bytes = bandwidth_kb * 1024
+                self.resource_settings["Downloads"]["MaxThroughput"] = bandwidth_bytes
 
             # Save all resource settings (including bandwidth) in one operation
             self._save_json(self.resource_settings_path, self.resource_settings)
 
             # Save debug mode to config
             self.config_handler.set('debug_mode', self.debug_checkbox.isChecked())
+            # OAuth disabled for v0.1.8 - no fallback setting needed
             # Save API key
             api_key = self.api_key_edit.text().strip()
             self.config_handler.save_api_key(api_key)
@@ -744,7 +919,21 @@ class SettingsDialog(QDialog):
             self.config_handler.set("game_proton_version", resolved_game_version)
 
             # Save component installation method preference
-            self.config_handler.set("use_winetricks_for_components", self.component_toggle.isChecked())
+            if self.winetricks_radio.isChecked():
+                method = 'winetricks'
+            else:  # protontricks_radio (default)
+                method = 'system_protontricks'
+
+            old_method = self.config_handler.get('component_installation_method', 'winetricks')
+            method_changed = (old_method != method)
+
+            self.config_handler.set("component_installation_method", method)
+            self.config_handler.set("use_winetricks_for_components", method == 'winetricks')
+
+            # Save GPU texture conversion preference
+            if hasattr(self, "gpu_enabled_radio") and hasattr(self, "gpu_disabled_radio"):
+                gpu_enabled = self.gpu_enabled_radio.isChecked()
+                self.config_handler.set("enable_gpu_texture_conversion", gpu_enabled)
 
             # Force immediate save and verify
             save_result = self.config_handler.save_config()
@@ -781,6 +970,16 @@ class SettingsDialog(QDialog):
                     return
 
             # If we get here, no restart was needed
+            # Check protontricks if user just switched to it
+            if method_changed and method == 'system_protontricks':
+                main_window = self.parent()
+                if main_window and hasattr(main_window, 'protontricks_service'):
+                    is_installed, installation_type, details = main_window.protontricks_service.detect_protontricks(use_cache=False)
+                    if not is_installed:
+                        from jackify.frontends.gui.dialogs.protontricks_error_dialog import ProtontricksErrorDialog
+                        dialog = ProtontricksErrorDialog(main_window.protontricks_service, main_window)
+                        dialog.exec()
+
             MessageService.information(self, "Settings Saved", "Settings have been saved successfully.", safety_level="low")
             self.accept()
 
@@ -822,38 +1021,205 @@ class JackifyMainWindow(QMainWindow):
     def __init__(self, dev_mode=False):
         super().__init__()
         self.setWindowTitle("Jackify")
-        self.setMinimumSize(1400, 950)
-        self.resize(1400, 900)
+        self._window_margin = 32
+        self._base_min_width = 900
+        self._base_min_height = 520
+        self._compact_height = 640
+        self._details_extra_height = 360
+        self._initial_show_adjusted = False
+        
+        # Ensure GNOME/Ubuntu exposes full set of window controls (avoid hidden buttons)
+        self._apply_standard_window_flags()
+        try:
+            self.setSizeGripEnabled(True)
+        except AttributeError:
+            pass
+        
+        # Set default responsive minimum constraints before restoring geometry
+        self.apply_responsive_minimum(self._base_min_width, self._base_min_height)
+        
+        # Restore window geometry from QSettings (standard Qt approach)
+        self._restore_geometry()
+        self.apply_responsive_minimum(self._base_min_width, self._base_min_height)
         
         # Initialize backend services
         self._initialize_backend()
-        
+
         # Set up UI
         self._setup_ui(dev_mode=dev_mode)
+
+        # Start background preload of gallery cache for instant gallery opening
+        self._start_gallery_cache_preload()
+
+        # DISABLED: Window geometry saving causes issues with expanded state being memorized
+        # QApplication.instance().aboutToQuit.connect(self._save_geometry_on_quit)
+        # self.resizeEvent = self._on_resize_event_geometry
+    
+    def _apply_standard_window_flags(self):
+        window_flags = self.windowFlags()
+        window_flags |= (
+            Qt.Window |
+            Qt.WindowTitleHint |
+            Qt.WindowSystemMenuHint |
+            Qt.WindowMinimizeButtonHint |
+            Qt.WindowMaximizeButtonHint |
+            Qt.WindowCloseButtonHint
+        )
+        window_flags &= ~Qt.CustomizeWindowHint
+        self.setWindowFlags(window_flags)
+    
+    def _restore_geometry(self):
+        """Restore window geometry from QSettings (standard Qt approach)"""
+        # DISABLED: Don't restore saved geometry to avoid expanded state issues
+        # Always start with fresh calculated size
+        width, height = self._calculate_initial_window_size()
+        # Ensure we use compact height, not expanded
+        height = min(height, self._compact_height)
+        self.resize(width, height)
+        self._center_on_screen(width, height)
+    
+    def _save_geometry_on_quit(self):
+        """Save window geometry on application quit (only if in compact mode)"""
+        # Only save if window is in compact mode (not expanded with "Show Details")
+        # Also ensure we don't save expanded geometry - always start collapsed
+        if self._is_compact_mode():
+            self._save_geometry()
+        else:
+            # If Show Details is enabled, clear saved geometry so we start collapsed next time
+            from PySide6.QtCore import QSettings
+            settings = QSettings("Jackify", "Jackify")
+            settings.remove("windowGeometry")
+    
+    def _is_compact_mode(self) -> bool:
+        """Check if window is in compact mode (not expanded with Show Details)"""
+        # Check if any child screen has "Show Details" checked
+        try:
+            if hasattr(self, 'install_modlist_screen'):
+                if hasattr(self.install_modlist_screen, 'show_details_checkbox'):
+                    if self.install_modlist_screen.show_details_checkbox.isChecked():
+                        return False
+            if hasattr(self, 'install_ttw_screen'):
+                if hasattr(self.install_ttw_screen, 'show_details_checkbox'):
+                    if self.install_ttw_screen.show_details_checkbox.isChecked():
+                        return False
+            if hasattr(self, 'configure_new_modlist_screen'):
+                if hasattr(self.configure_new_modlist_screen, 'show_details_checkbox'):
+                    if self.configure_new_modlist_screen.show_details_checkbox.isChecked():
+                        return False
+            if hasattr(self, 'configure_existing_modlist_screen'):
+                if hasattr(self.configure_existing_modlist_screen, 'show_details_checkbox'):
+                    if self.configure_existing_modlist_screen.show_details_checkbox.isChecked():
+                        return False
+        except Exception:
+            pass
+        return True
+    
+    def _save_geometry(self):
+        """Save window geometry to QSettings"""
+        from PySide6.QtCore import QSettings
+        settings = QSettings("Jackify", "Jackify")
+        settings.setValue("windowGeometry", self.saveGeometry())
+
+    def apply_responsive_minimum(self, min_width: int = 1100, min_height: int = 600):
+        """Apply minimum size that respects current screen bounds."""
+        set_responsive_minimum(self, min_width=min_width, min_height=min_height, margin=self._window_margin)
+
+    def _calculate_initial_window_size(self):
+        """Determine initial window size that fits within available screen space."""
+        _, _, screen_width, screen_height = get_screen_geometry(self)
+        if not screen_width or not screen_height:
+            return (self._base_min_width, self._base_min_height)
         
-        # Set up cleanup
-        QApplication.instance().aboutToQuit.connect(self.cleanup_processes)
+        width = min(
+            max(self._base_min_width, int(screen_width * 0.85)),
+            screen_width - self._window_margin
+        )
+        height = min(
+            max(self._base_min_height, int(screen_height * 0.75)),
+            screen_height - self._window_margin
+        )
+        return (width, height)
+
+    def _center_on_screen(self, width: int, height: int):
+        """Center window on the current screen."""
+        _, _, screen_width, screen_height = get_screen_geometry(self)
+        if not screen_width or not screen_height:
+            return
+        x = max(0, (screen_width - width) // 2)
+        y = max(0, (screen_height - height) // 2)
+        self.move(x, y)
+
+    def _ensure_within_available_geometry(self):
+        """Ensure restored geometry fits on the visible screen."""
+        from PySide6.QtCore import QRect
+        _, _, screen_width, screen_height = get_screen_geometry(self)
+        if not screen_width or not screen_height:
+            return
+        current_geometry: QRect = self.geometry()
+        new_width = min(current_geometry.width(), screen_width - self._window_margin)
+        new_height = min(current_geometry.height(), screen_height - self._window_margin)
+        new_width = max(new_width, self.minimumWidth())
+        new_height = max(new_height, self.minimumHeight())
+        new_x = min(max(current_geometry.x(), 0), screen_width - new_width)
+        new_y = min(max(current_geometry.y(), 0), screen_height - new_height)
+        self.setGeometry(new_x, new_y, new_width, new_height)
+    
+    def _on_resize_event_geometry(self, event):
+        """Handle window resize - save geometry if in compact mode"""
+        super().resizeEvent(event)
+        # Save geometry with a delay to avoid excessive writes
+        # Only save if in compact mode
+        if self._is_compact_mode():
+            from PySide6.QtCore import QTimer
+            if not hasattr(self, '_geometry_save_timer'):
+                self._geometry_save_timer = QTimer()
+                self._geometry_save_timer.setSingleShot(True)
+                self._geometry_save_timer.timeout.connect(self._save_geometry)
+            self._geometry_save_timer.stop()
+            self._geometry_save_timer.start(500)  # Save after 500ms of no resizing
+    
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._initial_show_adjusted:
+            self._initial_show_adjusted = True
+            # On Steam Deck, keep maximized state; on other systems, set normal window state
+            if not (hasattr(self, 'system_info') and self.system_info.is_steamdeck):
+                self.setWindowState(Qt.WindowNoState)
+                self.apply_responsive_minimum(self._base_min_width, self._base_min_height)
+                self._ensure_within_available_geometry()
     
     def _initialize_backend(self):
         """Initialize backend services for direct use (no subprocess)"""
-        # Determine system info
-        self.system_info = SystemInfo(is_steamdeck=self._is_steamdeck())
-        
+        # Detect Steam installation types once at startup
+        from ...shared.steam_utils import detect_steam_installation_types
+        is_flatpak, is_native = detect_steam_installation_types()
+
+        # Determine system info with Steam detection
+        self.system_info = SystemInfo(
+            is_steamdeck=self._is_steamdeck(),
+            is_flatpak_steam=is_flatpak,
+            is_native_steam=is_native
+        )
+
         # Apply resource limits for optimal operation
         self._apply_resource_limits()
-        
+
+        # Initialize config handler
+        from jackify.backend.handlers.config_handler import ConfigHandler
+        self.config_handler = ConfigHandler()
+
         # Initialize backend services
         self.backend_services = {
             'modlist_service': ModlistService(self.system_info)
         }
-        
+
         # Initialize GUI services
         self.gui_services = {}
-        
+
         # Initialize protontricks detection service
         from jackify.backend.services.protontricks_detection_service import ProtontricksDetectionService
         self.protontricks_service = ProtontricksDetectionService(steamdeck=self.system_info.is_steamdeck)
-        
+
         # Initialize update service
         from jackify.backend.services.update_service import UpdateService
         self.update_service = UpdateService(__version__)
@@ -913,7 +1279,7 @@ class JackifyMainWindow(QMainWindow):
             InstallModlistScreen, ConfigureNewModlistScreen, ConfigureExistingModlistScreen
         )
         from jackify.frontends.gui.screens.install_ttw import InstallTTWScreen
-        
+
         self.main_menu = MainMenu(stacked_widget=self.stacked_widget, dev_mode=dev_mode)
         self.feature_placeholder = FeaturePlaceholder(stacked_widget=self.stacked_widget)
         
@@ -944,9 +1310,15 @@ class JackifyMainWindow(QMainWindow):
             main_menu_index=0,
             system_info=self.system_info
         )
+
         # Let TTW screen request window resize for expand/collapse
         try:
             self.install_ttw_screen.resize_request.connect(self._on_child_resize_request)
+        except Exception:
+            pass
+        # Let Install Modlist screen request window resize for expand/collapse
+        try:
+            self.install_modlist_screen.resize_request.connect(self._on_child_resize_request)
         except Exception:
             pass
         
@@ -959,9 +1331,11 @@ class JackifyMainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.install_ttw_screen)            # Index 5: Install TTW
         self.stacked_widget.addWidget(self.configure_new_modlist_screen)  # Index 6: Configure New
         self.stacked_widget.addWidget(self.configure_existing_modlist_screen)  # Index 7: Configure Existing
-        
+
         # Add debug tracking for screen changes
         self.stacked_widget.currentChanged.connect(self._debug_screen_change)
+        # Ensure fullscreen is maintained on Steam Deck when switching screens
+        self.stacked_widget.currentChanged.connect(self._maintain_fullscreen_on_deck)
         
         # --- Persistent Bottom Bar ---
         bottom_bar = QWidget()
@@ -1015,8 +1389,11 @@ class JackifyMainWindow(QMainWindow):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        main_layout.addWidget(self.stacked_widget, stretch=1)  # Screen takes all available space
+        # Don't use stretch - let screens size to their content
+        main_layout.addWidget(self.stacked_widget)  # Screen sizes to content
         main_layout.addWidget(bottom_bar)  # Bottom bar stays at bottom
+        # Set stacked widget to not expand unnecessarily
+        self.stacked_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
         
@@ -1026,6 +1403,13 @@ class JackifyMainWindow(QMainWindow):
         # Check for protontricks after UI is set up
         self._check_protontricks_on_startup()
 
+    def _maintain_fullscreen_on_deck(self, index):
+        """Maintain maximized state on Steam Deck when switching screens."""
+        if hasattr(self, 'system_info') and self.system_info.is_steamdeck:
+            # Ensure window stays maximized on Steam Deck
+            if not self.isMaximized():
+                self.showMaximized()
+    
     def _debug_screen_change(self, index):
         """Handle screen changes - debug logging and state reset"""
         # Reset screen state when switching to workflow screens
@@ -1047,7 +1431,7 @@ class JackifyMainWindow(QMainWindow):
             4: "Install Modlist Screen",
             5: "Install TTW Screen",
             6: "Configure New Modlist",
-            7: "Configure Existing Modlist"
+            7: "Configure Existing Modlist",
         }
         screen_name = screen_names.get(index, f"Unknown Screen (Index {index})")
         widget = self.stacked_widget.widget(index)
@@ -1069,9 +1453,54 @@ class JackifyMainWindow(QMainWindow):
                     print(f"      - Layout type: {type(layout)}", file=sys.stderr)
                     print(f"      - Layout children count: {layout.count()}", file=sys.stderr)
         
+    def _start_gallery_cache_preload(self):
+        """Start background preloading of modlist metadata for instant gallery opening"""
+        from PySide6.QtCore import QThread, Signal
+
+        # Create background thread to preload gallery cache
+        class GalleryCachePreloadThread(QThread):
+            finished_signal = Signal(bool, str)
+
+            def run(self):
+                try:
+                    from jackify.backend.services.modlist_gallery_service import ModlistGalleryService
+                    service = ModlistGalleryService()
+
+                    # Fetch with search index to build cache (invisible background operation)
+                    metadata = service.fetch_modlist_metadata(
+                        include_validation=False,  # Skip validation for speed
+                        include_search_index=True,  # Include mods for search
+                        sort_by="title",
+                        force_refresh=False  # Use cache if valid
+                    )
+
+                    if metadata:
+                        modlists_with_mods = sum(1 for m in metadata.modlists if hasattr(m, 'mods') and m.mods)
+                        if modlists_with_mods > 0:
+                            debug_print(f"Gallery cache ready ({modlists_with_mods} modlists with mods)")
+                        else:
+                            debug_print("Gallery cache updated")
+                    else:
+                        debug_print("Failed to load gallery cache")
+
+                except Exception as e:
+                    debug_print(f"Gallery cache preload error: {str(e)}")
+
+        # Start thread (non-blocking, runs in background)
+        self._gallery_cache_preload_thread = GalleryCachePreloadThread()
+        self._gallery_cache_preload_thread.start()
+
+        debug_print("Started background gallery cache preload")
+
     def _check_protontricks_on_startup(self):
         """Check for protontricks installation on startup"""
         try:
+            # Only check for protontricks if user has selected it in settings
+            method = self.config_handler.get('component_installation_method', 'winetricks')
+            if method != 'system_protontricks':
+                debug_print(f"Skipping protontricks check (current method: {method}).")
+                return
+
             is_installed, installation_type, details = self.protontricks_service.detect_protontricks()
             
             if not is_installed:
@@ -1201,6 +1630,10 @@ class JackifyMainWindow(QMainWindow):
             traceback.print_exc()
 
     def _on_child_resize_request(self, mode: str):
+        """
+        Handle child screen resize requests (expand/collapse console).
+        Allow window expansion/collapse for Show Details toggle, but keep fixed sizing for navigation.
+        """
         debug_print(f"DEBUG: _on_child_resize_request called with mode='{mode}', current_size={self.size()}")
         # On Steam Deck we keep the stable, full-size layout and ignore child resize
         try:
@@ -1216,38 +1649,46 @@ class JackifyMainWindow(QMainWindow):
         except Exception:
             pass
 
-        # Ensure we can actually resize
-        self.showNormal()
-        self.setMaximumHeight(16777215)
-        debug_print(f"DEBUG: Set max height to unlimited, current_size={self.size()}")
-
-        if mode == 'expand':
-            # Restore a sensible minimum and expand height
-            min_width = max(1200, self.minimumWidth())
-            min_height = 900
-            debug_print(f"DEBUG: Expand mode - min_width={min_width}, min_height={min_height}")
-            try:
-                from PySide6.QtCore import QSize
-                self.setMinimumSize(QSize(min_width, min_height))
-            except Exception:
-                self.setMinimumSize(min_width, min_height)
-            # Animate to target height
-            target_height = max(self.size().height(), min_height)
-            self._animate_height(target_height)
+        # Allow expansion/collapse for Show Details toggle
+        # This is different from navigation resizing - we want this to work
+        if mode == "expand":
+            # Expand window to accommodate console
+            current_size = self.size()
+            current_pos = self.pos()
+            # Calculate target height and clamp to available space
+            target_height = self._compact_height + self._details_extra_height
+            self._resize_height(target_height)
+        elif mode == "collapse":
+            # Collapse window back to compact size
+            self._resize_height(self._compact_height)
         else:
-            # Collapse to compact height computed from the TTW screen's sizeHint
-            try:
-                content_hint = self.install_ttw_screen.sizeHint().height()
-            except Exception:
-                content_hint = 460
-            compact_height = max(440, min(560, content_hint + 20))
-            debug_print(f"DEBUG: Collapse mode - content_hint={content_hint}, compact_height={compact_height}")
-            from PySide6.QtCore import QSize
-            self.setMaximumHeight(compact_height)
-            self.setMinimumSize(QSize(max(1200, self.minimumWidth()), compact_height))
-            # Animate to compact height
-            self._animate_height(compact_height)
+            # Unknown mode - just ensure minimums
+            self.apply_responsive_minimum(self._base_min_width, self._base_min_height)
             
+    def _resize_height(self, requested_height: int):
+        """Resize the window to a given height while keeping it on-screen."""
+        target_height = self._clamp_height_to_screen(requested_height)
+        self.apply_responsive_minimum(self._base_min_width, self._base_min_height)
+        if ENABLE_WINDOW_HEIGHT_ANIMATION:
+            self._animate_height(target_height)
+            return
+        
+        geom = self.geometry()
+        new_y = geom.y()
+        _, _, _, screen_height = get_screen_geometry(self)
+        max_bottom = max(self._base_min_height, screen_height - self._window_margin)
+        if new_y + target_height > max_bottom:
+            new_y = max(0, max_bottom - target_height)
+        self._programmatic_resize = True
+        self.setGeometry(geom.x(), new_y, geom.width(), target_height)
+        QTimer.singleShot(100, lambda: setattr(self, '_programmatic_resize', False))
+
+    def _clamp_height_to_screen(self, requested_height: int) -> int:
+        """Clamp requested height to available screen space."""
+        _, _, _, screen_height = get_screen_geometry(self)
+        available = max(self._base_min_height, screen_height - self._window_margin)
+        return max(self._base_min_height, min(requested_height, available))
+    
     def _animate_height(self, target_height: int, duration_ms: int = 180):
         """Smoothly animate the window height to target_height.
 
@@ -1258,13 +1699,29 @@ class JackifyMainWindow(QMainWindow):
         except Exception:
             # Fallback to immediate resize if animation types are unavailable
             before = self.size()
+            self._programmatic_resize = True
             self.resize(self.size().width(), target_height)
             debug_print(f"DEBUG: Animated fallback resize from {before} to {self.size()}")
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, lambda: setattr(self, '_programmatic_resize', False))
             return
 
         # Build end rect with same x/y/width and target height
         start_rect = self.geometry()
-        end_rect = QRect(start_rect.x(), start_rect.y(), start_rect.width(), target_height)
+        end_rect = QRect(start_rect.x(), start_rect.y(), start_rect.width(), self._clamp_height_to_screen(target_height))
+        
+        # Check if expanded window would go off-screen and adjust position if needed
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geometry = screen.availableGeometry()
+            # Calculate where bottom would be with target_height
+            would_be_bottom = start_rect.y() + target_height
+            if would_be_bottom > screen_geometry.bottom():
+                # Window would go off bottom - move it up
+                new_y = screen_geometry.bottom() - target_height
+                if new_y < screen_geometry.top():
+                    new_y = screen_geometry.top()
+                end_rect.moveTop(new_y)
 
         # Hold reference to avoid GC stopping the animation
         self._resize_anim = QPropertyAnimation(self, b"geometry")
@@ -1272,13 +1729,34 @@ class JackifyMainWindow(QMainWindow):
         self._resize_anim.setEasingCurve(QEasingCurve.OutCubic)
         self._resize_anim.setStartValue(start_rect)
         self._resize_anim.setEndValue(end_rect)
+        # Mark as programmatic during animation
+        self._programmatic_resize = True
+        self._resize_anim.finished.connect(lambda: setattr(self, '_programmatic_resize', False))
         self._resize_anim.start()
 
 
+
 def resource_path(relative_path):
+    """Get path to resource file, handling both AppImage and dev modes."""
+    # PyInstaller frozen mode
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath(os.path.dirname(__file__)), relative_path)
+    
+    # AppImage mode - use APPDIR if available
+    appdir = os.environ.get('APPDIR')
+    if appdir:
+        # In AppImage, resources are in opt/jackify/ relative to APPDIR
+        # __file__ is at opt/jackify/frontends/gui/main.py, so go up to opt/jackify/
+        appimage_path = os.path.join(appdir, 'opt', 'jackify', relative_path)
+        if os.path.exists(appimage_path):
+            return appimage_path
+    
+    # Dev mode or fallback - go up from frontends/gui to jackify, then to assets
+    # __file__ is at src/jackify/frontends/gui/main.py, so go up to src/jackify/
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    # Go up from frontends/gui to jackify
+    jackify_dir = os.path.dirname(os.path.dirname(current_dir))
+    return os.path.join(jackify_dir, relative_path)
 
 
 def main():
@@ -1322,9 +1800,12 @@ def main():
     dev_mode = '--dev' in sys.argv
 
     # Launch GUI application
-    from PySide6.QtGui import QIcon
     app = QApplication(sys.argv)
-    
+    # CRITICAL: Set application name before desktop file name to ensure proper window title/icon on PopOS/Ubuntu
+    app.setApplicationName("Jackify")
+    app.setApplicationDisplayName("Jackify")
+    app.setDesktopFileName("jackify.desktop")
+
     # Global cleanup function for signal handling
     def emergency_cleanup():
         debug_print("Cleanup: terminating jackify-engine processes")
@@ -1345,10 +1826,63 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)  # System shutdown
     
     # Set the application icon
-    icon_path = resource_path('assets/JackifyLogo_256.png')
-    app.setWindowIcon(QIcon(icon_path))
+    # Try multiple locations - AppImage build script places icon in standard locations
+    icon_path = None
+    icon = QIcon()
+    
+    # Priority 1: Try resource_path (works in dev mode and if assets are in AppImage)
+    try_path = resource_path('assets/JackifyLogo_256.png')
+    if os.path.exists(try_path):
+        icon_path = try_path
+        icon = QIcon(try_path)
+    
+    # Priority 2: Try standard AppImage icon locations (where build script actually places it)
+    if icon.isNull():
+        appdir = os.environ.get('APPDIR')
+        if appdir:
+            appimage_icon_paths = [
+                os.path.join(appdir, 'com.jackify.app.png'),  # Root of AppDir
+                os.path.join(appdir, 'usr', 'share', 'icons', 'hicolor', '256x256', 'apps', 'com.jackify.app.png'),  # Standard location
+                os.path.join(appdir, 'opt', 'jackify', 'assets', 'JackifyLogo_256.png'),  # If assets are copied
+            ]
+            for path in appimage_icon_paths:
+                if os.path.exists(path):
+                    icon_path = path
+                    icon = QIcon(path)
+                    if not icon.isNull():
+                        if debug_mode:
+                            print(f"[DEBUG] Using AppImage icon: {path}")
+                        break
+    
+    # Priority 3: Fallback to any PNG in assets directory
+    if icon.isNull():
+        try_path = resource_path('assets/JackifyLogo_256.png')
+        if os.path.exists(try_path):
+            icon_path = try_path
+            icon = QIcon(try_path)
+    
+    if debug_mode:
+        print(f"[DEBUG] Final icon path: {icon_path}")
+        print(f"[DEBUG] Icon is null: {icon.isNull()}")
+    
+    app.setWindowIcon(icon)
     window = JackifyMainWindow(dev_mode=dev_mode)
+    window.setWindowIcon(icon)
     window.show()
+    
+    # On Steam Deck, set window to maximized to prevent button overlap with Show Details console
+    if hasattr(window, 'system_info') and window.system_info.is_steamdeck:
+        window.showMaximized()
+    else:
+        # Position window after showing (so size is finalized)
+        # Center horizontally, position near top (10% from top) to leave room for expansion
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geometry = screen.availableGeometry()
+            window_size = window.size()
+            x = (screen_geometry.width() - window_size.width()) // 2
+            y = int(screen_geometry.top() + (screen_geometry.height() * 0.1))  # 10% from top
+            window.move(x, y)
     
     # Start background update check after window is shown
     window._check_for_updates_on_startup()

@@ -6,8 +6,11 @@ Centralized service for detecting and managing protontricks installation across 
 """
 
 import logging
+import os
 import shutil
 import subprocess
+import sys
+import importlib.util
 from typing import Optional, Tuple
 from ..handlers.protontricks_handler import ProtontricksHandler
 from ..handlers.config_handler import ConfigHandler
@@ -44,11 +47,11 @@ class ProtontricksDetectionService:
     
     def detect_protontricks(self, use_cache: bool = True) -> Tuple[bool, str, str]:
         """
-        Detect if protontricks is installed and get installation details
-        
+        Detect if system protontricks is installed and get installation details
+
         Args:
             use_cache (bool): Whether to use cached detection result
-            
+
         Returns:
             Tuple[bool, str, str]: (is_installed, installation_type, details_message)
             - is_installed: True if protontricks is available
@@ -82,7 +85,7 @@ class ProtontricksDetectionService:
                 details_message = "Protontricks is installed (unknown type)"
         else:
             installation_type = 'none'
-            details_message = "Protontricks not found - required for Jackify functionality"
+            details_message = "Protontricks not found - install via flatpak or package manager"
         
         # Cache the result
         self._last_detection_result = (is_installed, installation_type, details_message)
@@ -93,55 +96,22 @@ class ProtontricksDetectionService:
     
     def _detect_without_prompts(self, handler: ProtontricksHandler) -> bool:
         """
-        Detect protontricks without user prompts or installation attempts
-        
+        Detect system protontricks (flatpak or native) without user prompts.
+
         Args:
             handler (ProtontricksHandler): Handler instance to use
-            
+
         Returns:
-            bool: True if protontricks is found
+            bool: True if system protontricks is found
         """
-        import shutil
-        
-        # Check if protontricks exists as a command
-        protontricks_path_which = shutil.which("protontricks")
-        
-        if protontricks_path_which:
-            # Check if it's a flatpak wrapper
-            try:
-                with open(protontricks_path_which, 'r') as f:
-                    content = f.read()
-                    if "flatpak run" in content:
-                        logger.debug(f"Detected Protontricks is a Flatpak wrapper at {protontricks_path_which}")
-                        handler.which_protontricks = 'flatpak'
-                        # Continue to check flatpak list just to be sure
-                    else:
-                        logger.info(f"Native Protontricks found at {protontricks_path_which}")
-                        handler.which_protontricks = 'native'
-                        handler.protontricks_path = protontricks_path_which
-                        return True
-            except Exception as e:
-                logger.error(f"Error reading protontricks executable: {e}")
-        
-        # Check if flatpak protontricks is installed
-        try:
-            env = handler._get_clean_subprocess_env()
-            result = subprocess.run(
-                ["flatpak", "list"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,  # Suppress stderr to avoid error messages
-                text=True,
-                env=env
-            )
-            if result.returncode == 0 and "com.github.Matoking.protontricks" in result.stdout:
-                logger.info("Flatpak Protontricks is installed")
-                handler.which_protontricks = 'flatpak'
-                return True
-        except FileNotFoundError:
-            logger.warning("'flatpak' command not found. Cannot check for Flatpak Protontricks.")
-        except Exception as e:
-            logger.error(f"Unexpected error checking flatpak: {e}")
-        
+        # Use the handler's silent detection method
+        return handler.detect_protontricks()
+
+    def is_bundled_mode(self) -> bool:
+        """
+        DEPRECATED: Bundled protontricks no longer supported.
+        Always returns False for backwards compatibility.
+        """
         return False
     
     def install_flatpak_protontricks(self) -> Tuple[bool, str]:

@@ -11,7 +11,9 @@ import logging
 import shutil
 import re
 import base64
+import hashlib
 from pathlib import Path
+from typing import Optional
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -40,7 +42,7 @@ class ConfigHandler:
         self.config_dir = os.path.expanduser("~/.config/jackify")
         self.config_file = os.path.join(self.config_dir, "config.json")
         self.settings = {
-            "version": "0.0.5",
+            "version": "0.2.0",
             "last_selected_modlist": None,
             "steam_libraries": [],
             "resolution": None,
@@ -52,12 +54,19 @@ class ConfigHandler:
             "modlist_install_base_dir": os.path.expanduser("~/Games"),  # Configurable base directory for modlist installations
             "modlist_downloads_base_dir": os.path.expanduser("~/Games/Modlist_Downloads"),  # Configurable base directory for downloads
             "jackify_data_dir": None,  # Configurable Jackify data directory (default: ~/Jackify)
-            "use_winetricks_for_components": True,  # True = use winetricks (faster), False = use protontricks for all (legacy)
-            "game_proton_path": None  # Proton version for game shortcuts (can be any Proton 9+), separate from install proton
+            "use_winetricks_for_components": True,  # DEPRECATED: Migrated to component_installation_method. Kept for backward compatibility.
+            "component_installation_method": "winetricks",  # "winetricks" (default) or "system_protontricks"
+            "game_proton_path": None,  # Proton version for game shortcuts (can be any Proton 9+), separate from install proton
+            "steam_restart_strategy": "jackify",  # "jackify" (default) or "nak_simple"
+            "window_width": None,  # Saved window width (None = use dynamic sizing)
+            "window_height": None  # Saved window height (None = use dynamic sizing)
         }
         
         # Load configuration if exists
         self._load_config()
+
+        # Perform version migrations
+        self._migrate_config()
 
         # If steam_path is not set, detect it
         if not self.settings["steam_path"]:
@@ -115,7 +124,10 @@ class ConfigHandler:
         return None
     
     def _load_config(self):
-        """Load configuration from file"""
+        """
+        Load configuration from file and update in-memory cache.
+        For legacy compatibility with initialization code.
+        """
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r') as f:
@@ -128,6 +140,78 @@ class ConfigHandler:
                 self._create_config_dir()
         except Exception as e:
             logger.error(f"Error loading configuration: {e}")
+
+    def _migrate_config(self):
+        """
+        Migrate configuration between versions
+        Handles breaking changes and data format updates
+        """
+        current_version = self.settings.get("version", "0.0.0")
+        target_version = "0.2.0"
+
+        if current_version == target_version:
+            return
+
+        logger.info(f"Migrating config from {current_version} to {target_version}")
+
+        # Migration: v0.0.x -> v0.2.0
+        # Encryption changed from cryptography (Fernet) to pycryptodome (AES-GCM)
+        # Old encrypted API keys cannot be decrypted, must be re-entered
+        if current_version < "0.2.0":
+            # Clear old encrypted credentials
+            if self.settings.get("nexus_api_key"):
+                logger.warning("Clearing saved API key due to encryption format change")
+                logger.warning("Please re-enter your Nexus API key in Settings")
+                self.settings["nexus_api_key"] = None
+
+            # Clear OAuth token file (different encryption format)
+            oauth_token_file = Path(self.config_dir) / "nexus-oauth.json"
+            if oauth_token_file.exists():
+                logger.warning("Clearing saved OAuth token due to encryption format change")
+                logger.warning("Please re-authorize with Nexus Mods")
+                try:
+                    oauth_token_file.unlink()
+                except Exception as e:
+                    logger.error(f"Failed to remove old OAuth token: {e}")
+
+            # Remove obsolete keys
+            obsolete_keys = [
+                "hoolamike_install_path",
+                "hoolamike_version",
+                "api_key_fallback_enabled",
+                "proton_version",  # Display string only, path stored in proton_path
+                "game_proton_version"  # Display string only, path stored in game_proton_path
+            ]
+
+            removed_count = 0
+            for key in obsolete_keys:
+                if key in self.settings:
+                    del self.settings[key]
+                    removed_count += 1
+
+            if removed_count > 0:
+                logger.info(f"Removed {removed_count} obsolete config keys")
+
+            # Update version
+            self.settings["version"] = target_version
+            self.save_config()
+            logger.info("Config migration completed")
+
+    def _read_config_from_disk(self):
+        """
+        Read configuration directly from disk without caching.
+        Returns merged config (defaults + saved values).
+        """
+        try:
+            config = self.settings.copy()  # Start with defaults
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    saved_config = json.load(f)
+                    config.update(saved_config)
+            return config
+        except Exception as e:
+            logger.error(f"Error reading configuration from disk: {e}")
+            return self.settings.copy()
 
     def reload_config(self):
         """Reload configuration from disk to pick up external changes"""
@@ -154,8 +238,12 @@ class ConfigHandler:
             return False
     
     def get(self, key, default=None):
-        """Get a configuration value by key"""
-        return self.settings.get(key, default)
+        """
+        Get a configuration value by key.
+        Always reads fresh from disk to avoid stale data.
+        """
+        config = self._read_config_from_disk()
+        return config.get(key, default)
     
     def set(self, key, value):
         """Set a configuration value"""
@@ -214,48 +302,178 @@ class ConfigHandler:
         """Get the path to protontricks executable"""
         return self.settings.get("protontricks_path") 
     
+    def _get_encryption_key(self) -> bytes:
+        """
+        Generate encryption key for API key storage using same method as OAuth tokens
+
+        Returns:
+            Fernet-compatible encryption key
+        """
+        import socket
+        import getpass
+
+        try:
+            hostname = socket.gethostname()
+            username = getpass.getuser()
+
+            # Try to get machine ID
+            machine_id = None
+            try:
+                with open('/etc/machine-id', 'r') as f:
+                    machine_id = f.read().strip()
+            except:
+                try:
+                    with open('/var/lib/dbus/machine-id', 'r') as f:
+                        machine_id = f.read().strip()
+                except:
+                    pass
+
+            if machine_id:
+                key_material = f"{hostname}:{username}:{machine_id}:jackify"
+            else:
+                key_material = f"{hostname}:{username}:jackify"
+
+        except Exception as e:
+            logger.warning(f"Failed to get machine info for encryption: {e}")
+            key_material = "jackify:default:key"
+
+        # Generate Fernet-compatible key
+        key_bytes = hashlib.sha256(key_material.encode('utf-8')).digest()
+        return base64.urlsafe_b64encode(key_bytes)
+
+    def _encrypt_api_key(self, api_key: str) -> str:
+        """
+        Encrypt API key using AES-GCM
+
+        Args:
+            api_key: Plain text API key
+
+        Returns:
+            Encrypted API key string
+        """
+        try:
+            from Crypto.Cipher import AES
+            from Crypto.Random import get_random_bytes
+
+            # Derive 32-byte AES key
+            key = base64.urlsafe_b64decode(self._get_encryption_key())
+
+            # Generate random nonce
+            nonce = get_random_bytes(12)
+
+            # Encrypt with AES-GCM
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            ciphertext, tag = cipher.encrypt_and_digest(api_key.encode('utf-8'))
+
+            # Combine and encode
+            combined = nonce + ciphertext + tag
+            return base64.b64encode(combined).decode('utf-8')
+
+        except ImportError:
+            # Fallback to base64 if pycryptodome not available
+            logger.warning("pycryptodome not available, using base64 encoding (less secure)")
+            return base64.b64encode(api_key.encode('utf-8')).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Error encrypting API key: {e}")
+            return ""
+
+    def _decrypt_api_key(self, encrypted_key: str) -> Optional[str]:
+        """
+        Decrypt API key using AES-GCM
+
+        Args:
+            encrypted_key: Encrypted API key string
+
+        Returns:
+            Decrypted API key or None on failure
+        """
+        try:
+            from Crypto.Cipher import AES
+
+            # Derive 32-byte AES key
+            key = base64.urlsafe_b64decode(self._get_encryption_key())
+
+            # Decode and split
+            combined = base64.b64decode(encrypted_key.encode('utf-8'))
+            nonce = combined[:12]
+            tag = combined[-16:]
+            ciphertext = combined[12:-16]
+
+            # Decrypt with AES-GCM
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+
+            return plaintext.decode('utf-8')
+
+        except ImportError:
+            # Fallback to base64 decode
+            try:
+                return base64.b64decode(encrypted_key.encode('utf-8')).decode('utf-8')
+            except:
+                return None
+        except Exception as e:
+            # Might be old base64-only format, try decoding
+            try:
+                return base64.b64decode(encrypted_key.encode('utf-8')).decode('utf-8')
+            except:
+                logger.error(f"Error decrypting API key: {e}")
+                return None
+
     def save_api_key(self, api_key):
         """
-        Save Nexus API key with base64 encoding
-        
+        Save Nexus API key with Fernet encryption
+
         Args:
             api_key (str): Plain text API key
-            
+
         Returns:
             bool: True if saved successfully, False otherwise
         """
         try:
             if api_key:
-                # Encode the API key using base64
-                encoded_key = base64.b64encode(api_key.encode('utf-8')).decode('utf-8')
-                self.settings["nexus_api_key"] = encoded_key
-                logger.debug("API key saved successfully")
+                # Encrypt the API key using Fernet
+                encrypted_key = self._encrypt_api_key(api_key)
+                if not encrypted_key:
+                    logger.error("Failed to encrypt API key")
+                    return False
+
+                self.settings["nexus_api_key"] = encrypted_key
+                logger.debug("API key encrypted and saved successfully")
             else:
                 # Clear the API key if empty
                 self.settings["nexus_api_key"] = None
                 logger.debug("API key cleared")
-            
-            return self.save_config()
+
+            result = self.save_config()
+
+            # Set restrictive permissions on config file
+            if result:
+                try:
+                    os.chmod(self.config_file, 0o600)
+                except Exception as e:
+                    logger.warning(f"Could not set restrictive permissions on config: {e}")
+
+            return result
+
         except Exception as e:
             logger.error(f"Error saving API key: {e}")
             return False
-    
+
     def get_api_key(self):
         """
-        Retrieve and decode the saved Nexus API key
-        Always reads fresh from disk to pick up changes from other instances
-        
+        Retrieve and decrypt the saved Nexus API key.
+        Always reads fresh from disk.
+
         Returns:
-            str: Decoded API key or None if not saved
+            str: Decrypted API key or None if not saved
         """
         try:
-            # Reload config from disk to pick up changes from Settings dialog
-            self._load_config()
-            encoded_key = self.settings.get("nexus_api_key")
-            if encoded_key:
-                # Decode the base64 encoded key
-                decoded_key = base64.b64decode(encoded_key.encode('utf-8')).decode('utf-8')
-                return decoded_key
+            config = self._read_config_from_disk()
+            encrypted_key = config.get("nexus_api_key")
+            if encrypted_key:
+                # Decrypt the API key
+                decrypted_key = self._decrypt_api_key(encrypted_key)
+                return decrypted_key
             return None
         except Exception as e:
             logger.error(f"Error retrieving API key: {e}")
@@ -263,15 +481,14 @@ class ConfigHandler:
     
     def has_saved_api_key(self):
         """
-        Check if an API key is saved in configuration
-        Always reads fresh from disk to pick up changes from other instances
-        
+        Check if an API key is saved in configuration.
+        Always reads fresh from disk.
+
         Returns:
             bool: True if API key exists, False otherwise
         """
-        # Reload config from disk to pick up changes from Settings dialog
-        self._load_config()
-        return self.settings.get("nexus_api_key") is not None
+        config = self._read_config_from_disk()
+        return config.get("nexus_api_key") is not None
     
     def clear_api_key(self):
         """
@@ -519,16 +736,15 @@ class ConfigHandler:
 
     def get_proton_path(self):
         """
-        Retrieve the saved Install Proton path from configuration (for jackify-engine)
-        Always reads fresh from disk to pick up changes from Settings dialog
+        Retrieve the saved Install Proton path from configuration (for jackify-engine).
+        Always reads fresh from disk.
 
         Returns:
             str: Saved Install Proton path or 'auto' if not saved
         """
         try:
-            # Reload config from disk to pick up changes from Settings dialog
-            self._load_config()
-            proton_path = self.settings.get("proton_path", "auto")
+            config = self._read_config_from_disk()
+            proton_path = config.get("proton_path", "auto")
             logger.debug(f"Retrieved fresh install proton_path from config: {proton_path}")
             return proton_path
         except Exception as e:
@@ -537,21 +753,20 @@ class ConfigHandler:
 
     def get_game_proton_path(self):
         """
-        Retrieve the saved Game Proton path from configuration (for game shortcuts)
-        Falls back to install Proton path if game Proton not set
-        Always reads fresh from disk to pick up changes from Settings dialog
+        Retrieve the saved Game Proton path from configuration (for game shortcuts).
+        Falls back to install Proton path if game Proton not set.
+        Always reads fresh from disk.
 
         Returns:
             str: Saved Game Proton path, Install Proton path, or 'auto' if not saved
         """
         try:
-            # Reload config from disk to pick up changes from Settings dialog
-            self._load_config()
-            game_proton_path = self.settings.get("game_proton_path")
+            config = self._read_config_from_disk()
+            game_proton_path = config.get("game_proton_path")
 
             # If game proton not set or set to same_as_install, use install proton
             if not game_proton_path or game_proton_path == "same_as_install":
-                game_proton_path = self.settings.get("proton_path", "auto")
+                game_proton_path = config.get("proton_path", "auto")
 
             logger.debug(f"Retrieved fresh game proton_path from config: {game_proton_path}")
             return game_proton_path
@@ -561,16 +776,15 @@ class ConfigHandler:
 
     def get_proton_version(self):
         """
-        Retrieve the saved Proton version from configuration
-        Always reads fresh from disk to pick up changes from Settings dialog
+        Retrieve the saved Proton version from configuration.
+        Always reads fresh from disk.
 
         Returns:
             str: Saved Proton version or 'auto' if not saved
         """
         try:
-            # Reload config from disk to pick up changes from Settings dialog
-            self._load_config()
-            proton_version = self.settings.get("proton_version", "auto")
+            config = self._read_config_from_disk()
+            proton_version = config.get("proton_version", "auto")
             logger.debug(f"Retrieved fresh proton_version from config: {proton_version}")
             return proton_version
         except Exception as e:

@@ -481,14 +481,34 @@ class NativeSteamService:
         Returns:
             (success, app_id) - Success status and the AppID
         """
-        # Auto-detect best Proton version if none provided
+        # Use Game Proton from settings for shortcut creation (not Install Proton)
         if proton_version is None:
             try:
-                from jackify.backend.core.modlist_operations import _get_user_proton_version
-                proton_version = _get_user_proton_version()
-                logger.info(f"Auto-detected Proton version: {proton_version}")
+                from jackify.backend.handlers.config_handler import ConfigHandler
+                config_handler = ConfigHandler()
+                game_proton_path = config_handler.get_game_proton_path()
+                
+                if game_proton_path and game_proton_path != 'auto':
+                    # User has selected Game Proton - use it
+                    proton_version = os.path.basename(game_proton_path)
+                    # Convert to Steam format
+                    if not proton_version.startswith('GE-Proton'):
+                        proton_version = proton_version.lower().replace(' - ', '_').replace(' ', '_').replace('-', '_')
+                        if not proton_version.startswith('proton'):
+                            proton_version = f"proton_{proton_version}"
+                    logger.info(f"Using Game Proton from settings: {proton_version}")
+                else:
+                    # Fallback to auto-detect if Game Proton not set
+                    from jackify.backend.handlers.wine_utils import WineUtils
+                    best_proton = WineUtils.select_best_proton()
+                    if best_proton:
+                        proton_version = best_proton['name']
+                        logger.info(f"Auto-detected Game Proton: {proton_version}")
+                    else:
+                        proton_version = "proton_experimental"
+                        logger.warning("Failed to auto-detect Game Proton, falling back to experimental")
             except Exception as e:
-                logger.warning(f"Failed to auto-detect Proton, falling back to experimental: {e}")
+                logger.warning(f"Failed to get Game Proton, falling back to experimental: {e}")
                 proton_version = "proton_experimental"
 
         logger.info(f"Creating shortcut with Proton: '{app_name}' -> '{proton_version}'")
