@@ -275,22 +275,23 @@ def start_steam(is_steamdeck_flag=None, is_flatpak_flag=None, env_override=None,
 
         # Check if Flatpak Steam (only if not Steam Deck)
         if _is_flatpak:
-            logger.info("Flatpak Steam detected - using flatpak run command")
+            logger.info("Flatpak Steam detected - trying flatpak run command first")
             try:
-                # Use -foreground to ensure GUI opens (not -silent)
-                # CRITICAL: Do NOT use start_new_session - Steam needs to inherit the session
-                logger.debug("Executing: flatpak run com.valvesoftware.Steam -foreground (inheriting session for GUI)")
-                subprocess.Popen(["flatpak", "run", "com.valvesoftware.Steam", "-foreground"],
-                               env=env, stderr=subprocess.DEVNULL)
-                time.sleep(5)
+                # Try without flags first (most reliable for Ubuntu/PopOS)
+                logger.debug("Executing: flatpak run com.valvesoftware.Steam")
+                subprocess.Popen(["flatpak", "run", "com.valvesoftware.Steam"],
+                               env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(7)  # Give Flatpak more time to start
                 check_result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
                 if check_result.returncode == 0:
-                    logger.info("Flatpak Steam process detected after start.")
+                    logger.info("Flatpak Steam started successfully")
                     return True
                 else:
-                    logger.warning("Flatpak Steam start failed, falling back to normal Steam start methods")
+                    logger.warning("Flatpak Steam not detected after launch - will NOT fall back to prevent conflicts")
+                    return False  # Flatpak Steam must use flatpak command, don't fall back
             except Exception as e:
-                logger.warning(f"Flatpak Steam start failed ({e}), falling back to normal Steam start methods")
+                logger.error(f"Flatpak Steam start failed: {e}")
+                return False  # Flatpak Steam must use flatpak command, don't fall back
 
         # Use startup methods with -foreground flag to ensure GUI opens
         start_methods = [
