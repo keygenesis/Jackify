@@ -1,7 +1,7 @@
 """
 InstallModlistScreen for Jackify GUI
 """
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QGridLayout, QFileDialog, QTextEdit, QSizePolicy, QTabWidget, QDialog, QListWidget, QListWidgetItem, QMessageBox, QProgressDialog, QApplication, QCheckBox, QStyledItemDelegate, QStyle, QTableWidget, QTableWidgetItem, QHeaderView
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QGridLayout, QFileDialog, QTextEdit, QSizePolicy, QTabWidget, QDialog, QListWidget, QListWidgetItem, QMessageBox, QProgressDialog, QApplication, QCheckBox, QStyledItemDelegate, QStyle, QTableWidget, QTableWidgetItem, QHeaderView, QMainWindow
 from PySide6.QtCore import Qt, QSize, QThread, Signal, QTimer, QProcess, QMetaObject, QUrl
 from PySide6.QtGui import QPixmap, QTextCursor, QColor, QPainter, QFont
 from ..shared_theme import JACKIFY_COLOR_BLUE, DEBUG_BORDERS
@@ -2533,10 +2533,34 @@ class InstallModlistScreen(QWidget):
                     debug_print(f"DEBUG:   - {fp.filename}: {fp.percent:.1f}% ({fp.operation.value})")
             # Pass phase label to update header (e.g., "[Activity - Downloading]")
             # Explicitly clear summary_info when showing file list
-            self.file_progress_list.update_files(progress_state.active_files, current_phase=phase_label, summary_info=None)
+            try:
+                self.file_progress_list.update_files(progress_state.active_files, current_phase=phase_label, summary_info=None)
+            except RuntimeError as e:
+                # Widget was deleted - ignore to prevent coredump
+                if "already deleted" in str(e):
+                    if self.debug:
+                        debug_print(f"DEBUG: Ignoring widget deletion error: {e}")
+                    return
+                raise
+            except Exception as e:
+                # Catch any other exceptions to prevent coredump
+                if self.debug:
+                    debug_print(f"DEBUG: Error updating file progress list: {e}")
+                import logging
+                logging.getLogger(__name__).error(f"Error updating file progress list: {e}", exc_info=True)
         else:
             # Show empty state so widget stays visible even when no files are active
-            self.file_progress_list.update_files([], current_phase=phase_label)
+            try:
+                self.file_progress_list.update_files([], current_phase=phase_label)
+            except RuntimeError as e:
+                # Widget was deleted - ignore to prevent coredump
+                if "already deleted" in str(e):
+                    return
+                raise
+            except Exception as e:
+                # Catch any other exceptions to prevent coredump
+                import logging
+                logging.getLogger(__name__).error(f"Error updating file progress list: {e}", exc_info=True)
     
     def _on_show_details_toggled(self, checked: bool):
         """R&D: Toggle console visibility (reuse TTW pattern)"""
@@ -2996,19 +3020,24 @@ class InstallModlistScreen(QWidget):
         normalized = text.lower()
         total = max(1, self._post_install_total_steps)
         matched = False
+        matched_step = None
         for idx, step in enumerate(self._post_install_sequence, start=1):
             if any(keyword in normalized for keyword in step['keywords']):
                 matched = True
+                matched_step = idx
+                # Always update to the highest step we've seen (don't go backwards)
                 if idx >= self._post_install_current_step:
                     self._post_install_current_step = idx
                     self._post_install_last_label = step['label']
-                    self._update_post_install_ui(step['label'], idx, total, detail=text)
-                else:
-                    self._update_post_install_ui(step['label'], idx, total, detail=text)
+                # CRITICAL: Always use the current step (not the matched step) to ensure consistency
+                # This prevents Activity window showing different step than progress banner
+                self._update_post_install_ui(step['label'], self._post_install_current_step, total, detail=text)
                 break
         
+        # If no match but we have a current step, update with that step (not a new one)
         if not matched and self._post_install_current_step > 0:
             label = self._post_install_last_label or "Post-installation"
+            # CRITICAL: Use _post_install_current_step (not a new step) to keep displays in sync
             self._update_post_install_ui(label, self._post_install_current_step, total, detail=text)
     
     def _strip_timestamp_prefix(self, text: str) -> str:
@@ -3020,11 +3049,14 @@ class InstallModlistScreen(QWidget):
 
     def _update_post_install_ui(self, label: str, step: int, total: int, detail: Optional[str] = None):
         """Update progress indicator + activity summary for post-install steps."""
+        # Use the label as the primary display, but include step info in Activity window
         display_label = label
         if detail:
             # Remove timestamp prefix from detail messages
             clean_detail = self._strip_timestamp_prefix(detail.strip())
             if clean_detail:
+                # For Activity window, show the detail with step counter
+                # But keep label simple for progress banner
                 if clean_detail.lower().startswith(label.lower()):
                     display_label = clean_detail
                 else:
@@ -3032,18 +3064,24 @@ class InstallModlistScreen(QWidget):
         total = max(1, total)
         step_clamped = max(0, min(step, total))
         overall_percent = (step_clamped / total) * 100.0
+        
+        # CRITICAL: Ensure both displays use the SAME step counter
+        # Progress banner uses phase_step/phase_max_steps from progress_state
         progress_state = InstallationProgress(
             phase=InstallationPhase.FINALIZE,
-            phase_name=display_label,
-            phase_step=step_clamped,
+            phase_name=display_label,  # This will show in progress banner
+            phase_step=step_clamped,    # This creates [step/total] in display_text
             phase_max_steps=total,
             overall_percent=overall_percent
         )
         self.progress_indicator.update_progress(progress_state)
+        
+        # Activity window uses summary_info with the SAME step counter
         summary_info = {
-            'current_step': step_clamped,
-            'max_steps': total,
+            'current_step': step_clamped,  # Must match phase_step above
+            'max_steps': total,            # Must match phase_max_steps above
         }
+        # Use the same label for consistency
         self.file_progress_list.update_files([], current_phase=display_label, summary_info=summary_info)
     
     def _end_post_install_feedback(self, success: bool):
@@ -3263,6 +3301,52 @@ class InstallModlistScreen(QWidget):
                     debug_print(f"DEBUG: steam -foreground failed: {e2}")
             except Exception as e:
                 debug_print(f"DEBUG: Error ensuring Steam GUI visibility: {e}")
+            
+            # CRITICAL: Bring Jackify window back to focus after Steam restart
+            # This ensures the user can continue with the installation workflow
+            debug_print("DEBUG: Bringing Jackify window back to focus")
+            try:
+                # Get the main window - use window() to get top-level widget, then find QMainWindow
+                top_level = self.window()
+                main_window = None
+                
+                # Try to find QMainWindow in the widget hierarchy
+                if isinstance(top_level, QMainWindow):
+                    main_window = top_level
+                else:
+                    # Walk up the parent chain
+                    current = self
+                    while current:
+                        if isinstance(current, QMainWindow):
+                            main_window = current
+                            break
+                        current = current.parent()
+                    
+                    # Last resort: use top-level widget
+                    if not main_window and top_level:
+                        main_window = top_level
+                
+                if main_window:
+                    # Restore window if minimized
+                    if hasattr(main_window, 'isMinimized') and main_window.isMinimized():
+                        main_window.showNormal()
+                    
+                    # Bring to front and activate - use multiple methods for reliability
+                    main_window.raise_()
+                    main_window.activateWindow()
+                    main_window.show()
+                    
+                    # Force focus with multiple attempts (some window managers need this)
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(50, lambda: main_window.activateWindow() if main_window else None)
+                    QTimer.singleShot(200, lambda: (main_window.raise_(), main_window.activateWindow()) if main_window else None)
+                    QTimer.singleShot(500, lambda: main_window.activateWindow() if main_window else None)
+                    
+                    debug_print(f"DEBUG: Jackify window brought back to focus (type: {type(main_window).__name__})")
+                else:
+                    debug_print("DEBUG: Could not find main window to bring to focus")
+            except Exception as e:
+                debug_print(f"DEBUG: Error bringing Jackify to focus: {e}")
 
             # Save context for later use in configuration
             self._manual_steps_retry_count = 0

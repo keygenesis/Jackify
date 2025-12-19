@@ -472,13 +472,15 @@ class InstallTTWScreen(QWidget):
                 # Check version against latest
                 update_available, installed_v, latest_v = ttw_installer_handler.is_ttw_installer_update_available()
                 if update_available:
-                    self.ttw_installer_status.setText("Out of date")
+                    version_text = f"Out of date (v{installed_v} → v{latest_v})" if installed_v and latest_v else "Out of date"
+                    self.ttw_installer_status.setText(version_text)
                     self.ttw_installer_status.setStyleSheet("color: #f44336;")
                     self.ttw_installer_btn.setText("Update now")
                     self.ttw_installer_btn.setEnabled(True)
                     self.ttw_installer_btn.setVisible(True)
                 else:
-                    self.ttw_installer_status.setText("Ready")
+                    version_text = f"Ready (v{installed_v})" if installed_v else "Ready"
+                    self.ttw_installer_status.setText(version_text)
                     self.ttw_installer_status.setStyleSheet("color: #3fd0ea;")
                     self.ttw_installer_btn.setText("Update now")
                     self.ttw_installer_btn.setEnabled(False)  # Greyed out when ready
@@ -1418,8 +1420,11 @@ class InstallTTWScreen(QWidget):
             is_warning = 'warning:' in lower_cleaned
             is_milestone = any(kw in lower_cleaned for kw in ['===', 'complete', 'finished', 'validation', 'configuration valid'])
             is_file_op = any(ext in lower_cleaned for ext in ['.ogg', '.mp3', '.bsa', '.dds', '.nif', '.kf', '.hkx'])
-
-            should_show = (is_error or is_warning or is_milestone) or (self.show_details_checkbox.isChecked() and not is_file_op)
+            
+            # Filter out meaningless standalone messages (just "OK", etc.)
+            is_noise = cleaned.strip().upper() in ['OK', 'OK.', 'OK!', 'DONE', 'DONE.', 'SUCCESS', 'SUCCESS.']
+            
+            should_show = (is_error or is_warning or is_milestone) or (self.show_details_checkbox.isChecked() and not is_file_op and not is_noise)
 
             if should_show:
                 if is_error or is_warning:
@@ -1550,7 +1555,10 @@ class InstallTTWScreen(QWidget):
         is_milestone = any(kw in lower_cleaned for kw in ['===', 'complete', 'finished', 'validation', 'configuration valid'])
         is_file_op = any(ext in lower_cleaned for ext in ['.ogg', '.mp3', '.bsa', '.dds', '.nif', '.kf', '.hkx'])
         
-        should_show = (is_error or is_warning or is_milestone) or (self.show_details_checkbox.isChecked() and not is_file_op)
+        # Filter out meaningless standalone messages (just "OK", etc.)
+        is_noise = cleaned.strip().upper() in ['OK', 'OK.', 'OK!', 'DONE', 'DONE.', 'SUCCESS', 'SUCCESS.']
+        
+        should_show = (is_error or is_warning or is_milestone) or (self.show_details_checkbox.isChecked() and not is_file_op and not is_noise)
         
         if should_show:
             # Direct console append - no recursion, no complex processing

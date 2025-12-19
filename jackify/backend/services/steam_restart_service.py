@@ -150,8 +150,14 @@ def is_flatpak_steam() -> bool:
                               stderr=subprocess.DEVNULL,  # Suppress stderr to avoid error messages
                               text=True,
                               timeout=5)
-        if result.returncode == 0 and 'com.valvesoftware.Steam' in result.stdout:
-            return True
+        if result.returncode == 0:
+            # Check for exact match - "com.valvesoftware.Steam" as a whole word
+            # This prevents matching "com.valvesoftware.SteamLink" or similar
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if parts and parts[0] == 'com.valvesoftware.Steam':
+                    return True
+        return False
     except Exception as e:
         logger.debug(f"Error detecting Flatpak Steam: {e}")
     return False
@@ -222,7 +228,8 @@ def _start_steam_nak_style(is_steamdeck_flag=False, is_flatpak_flag=False, env_o
             subprocess.Popen("steam", shell=True, env=env)
 
         time.sleep(5)
-        check_result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
+        # Use steamwebhelper for detection (actual Steam process, not steam-powerbuttond)
+        check_result = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=env)
         if check_result.returncode == 0:
             logger.info("NaK-style restart detected running Steam process.")
             return True
@@ -282,7 +289,8 @@ def start_steam(is_steamdeck_flag=None, is_flatpak_flag=None, env_override=None,
                 subprocess.Popen(["flatpak", "run", "com.valvesoftware.Steam"],
                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 time.sleep(7)  # Give Flatpak more time to start
-                check_result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
+                # For Flatpak Steam, check for the flatpak process, not steamwebhelper
+                check_result = subprocess.run(['pgrep', '-f', 'com.valvesoftware.Steam'], capture_output=True, timeout=10, env=env)
                 if check_result.returncode == 0:
                     logger.info("Flatpak Steam started successfully")
                     return True
@@ -308,7 +316,8 @@ def start_steam(is_steamdeck_flag=None, is_flatpak_flag=None, env_override=None,
                 if process is not None:
                     logger.info(f"Initiated Steam start with {method_name}.")
                     time.sleep(5)  # Wait 5 seconds as in existing logic
-                    check_result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=env)
+                    # Use steamwebhelper for detection (actual Steam process, not steam-powerbuttond)
+                    check_result = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=env)
                     if check_result.returncode == 0:
                         logger.info(f"Steam process detected after using {method_name}. Proceeding to wait phase.")
                         return True
@@ -367,7 +376,7 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
         try:
             report("Flatpak Steam detected - stopping via flatpak...")
             subprocess.run(['flatpak', 'kill', 'com.valvesoftware.Steam'],
-                         timeout=15, check=False, capture_output=True, stderr=subprocess.DEVNULL, env=shutdown_env)
+                         timeout=15, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=shutdown_env)
             time.sleep(2)
         except Exception as e:
             logger.debug(f"flatpak kill failed: {e}")
@@ -427,7 +436,8 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
             report("Failed to start Steam.")
             return False
 
-    # Wait for Steam to fully initialize using existing logic
+    # Wait for Steam to fully initialize
+    # CRITICAL: Use steamwebhelper (actual Steam process), not "steam" (matches steam-powerbuttond, etc.)
     report("Waiting for Steam to fully start")
     logger.info("Waiting up to 2 minutes for Steam to fully initialize...")
     max_startup_wait = 120
@@ -436,7 +446,8 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
     
     while elapsed_wait < max_startup_wait:
         try:
-            result = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=start_env)
+            # Use steamwebhelper for detection (matches shutdown logic)
+            result = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=start_env)
             if result.returncode == 0:
                 if not initial_wait_done:
                     logger.info("Steam process detected. Waiting additional time for full initialization...")
@@ -444,7 +455,7 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
                 time.sleep(5)
                 elapsed_wait += 5
                 if initial_wait_done and elapsed_wait >= 15:
-                    final_check = subprocess.run(['pgrep', '-f', 'steam'], capture_output=True, timeout=10, env=start_env)
+                    final_check = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=start_env)
                     if final_check.returncode == 0:
                         report("Steam started successfully.")
                         logger.info("Steam confirmed running after wait.")

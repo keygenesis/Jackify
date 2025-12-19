@@ -117,8 +117,9 @@ class OverallProgressIndicator(QWidget):
             from jackify.shared.progress_models import InstallationPhase
             is_bsa_building = progress.get_phase_label() == "Building BSAs"
             
-            # For install/extract/BSA building phases, prefer step-based progress (more accurate)
-            if progress.phase in (InstallationPhase.INSTALL, InstallationPhase.EXTRACT) or is_bsa_building:
+            # For install/extract/download/BSA building phases, prefer step-based progress (more accurate)
+            # This prevents carrying over 100% from previous phases (e.g., .wabbajack download)
+            if progress.phase in (InstallationPhase.INSTALL, InstallationPhase.EXTRACT, InstallationPhase.DOWNLOAD) or is_bsa_building:
                 if progress.phase_max_steps > 0:
                     display_percent = (progress.phase_step / progress.phase_max_steps) * 100.0
                 elif progress.data_total > 0 and progress.data_processed > 0:

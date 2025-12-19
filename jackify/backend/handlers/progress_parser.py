@@ -224,7 +224,7 @@ class ProgressParser:
             speed_info = self._parse_speed_from_string(speed_str)
             if speed_info:
                 operation = self._detect_operation_from_line(status_text)
-                result.speed_info = (operation, speed_info)
+                result.speed_info = (operation.value, speed_info)
             
             # Calculate overall percentage from step progress
             if max_steps > 0:
@@ -400,6 +400,18 @@ class ProgressParser:
     
     def _extract_file_progress(self, line: str) -> Optional[FileProgress]:
         """Extract file-level progress information."""
+        # CRITICAL: Defensive checks to prevent segfault in regex engine
+        # Segfaults happen in C code before Python exceptions, so we must validate input first
+        if not line or not isinstance(line, str):
+            return None
+        # Limit line length to prevent stack overflow in regex (10KB should be more than enough)
+        if len(line) > 10000:
+            return None
+        # Check for null bytes or other problematic characters that could corrupt regex
+        if '\x00' in line:
+            # Replace null bytes to prevent corruption
+            line = line.replace('\x00', '')
+        
         # PRIORITY: Check for [FILE_PROGRESS] prefix first (new engine format)
         # Format: [FILE_PROGRESS] Downloading: filename.zip (20.0%) [3.7MB/s]
         # Updated format: [FILE_PROGRESS] (Downloading|Extracting|Installing|Converting|Completed|etc): filename.zip (20.0%) [3.7MB/s] (current/total)
@@ -907,6 +919,13 @@ class ProgressStateManager:
                 self._remove_synthetic_wabbajack()
                 # Mark that we have a real .wabbajack entry to prevent synthetic ones
                 self._has_real_wabbajack = True
+            else:
+                # CRITICAL: If we get a real archive file (not .wabbajack), remove all .wabbajack entries
+                # This ensures .wabbajack entries disappear as soon as archive downloads start
+                from jackify.shared.progress_models import OperationType
+                if parsed.file_progress.operation == OperationType.DOWNLOAD:
+                    self._remove_all_wabbajack_entries()
+                    self._has_real_wabbajack = True  # Prevent re-adding
             self._augment_file_metrics(parsed.file_progress)
             # Don't add files that are already at 100% unless they're being updated
             # This prevents re-adding completed files
@@ -934,6 +953,21 @@ class ProgressStateManager:
                 self.state.add_file(parsed.file_progress)
                 updated = True
         elif parsed.data_info:
+            # CRITICAL: Remove .wabbajack entries as soon as archive download phase starts
+            # Check if we're in "Downloading Mod Archives" phase or have real archive files downloading
+            phase_name_lower = (parsed.phase_name or "").lower()
+            message_lower = (parsed.message or "").lower()
+            is_archive_phase = (
+                'mod archives' in phase_name_lower or
+                'downloading mod archives' in message_lower or
+                (parsed.phase == InstallationPhase.DOWNLOAD and self._has_real_download_activity())
+            )
+            
+            if is_archive_phase:
+                # Archive download phase has started - remove all .wabbajack entries immediately
+                self._remove_all_wabbajack_entries()
+                self._has_real_wabbajack = True  # Prevent re-adding
+            
             # Only create synthetic .wabbajack entry if we don't already have a real one
             if not getattr(self, '_has_real_wabbajack', False):
                 if self._maybe_add_wabbajack_progress(parsed):
@@ -1164,4 +1198,19 @@ class ProgressStateManager:
             remaining.append(fp)
         if removed:
             self.state.active_files = remaining
+    
+    def _remove_all_wabbajack_entries(self):
+        """Remove ALL .wabbajack entries (synthetic and real) when archive download phase starts."""
+        remaining = []
+        removed = False
+        for fp in self.state.active_files:
+            if fp.filename.lower().endswith('.wabbajack') or 'wabbajack' in fp.filename.lower():
+                removed = True
+                self._file_history.pop(fp.filename, None)
+                continue
+            remaining.append(fp)
+        if removed:
+            self.state.active_files = remaining
+            # Also clear the wabbajack entry name to prevent re-adding
+            self._wabbajack_entry_name = None
 

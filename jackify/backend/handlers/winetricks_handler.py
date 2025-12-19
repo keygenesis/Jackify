@@ -9,7 +9,7 @@ import os
 import subprocess
 import logging
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +110,16 @@ class WinetricksHandler:
             self.logger.error(f"Error testing winetricks: {e}")
             return False
 
-    def install_wine_components(self, wineprefix: str, game_var: str, specific_components: Optional[List[str]] = None) -> bool:
+    def install_wine_components(self, wineprefix: str, game_var: str, specific_components: Optional[List[str]] = None, status_callback: Optional[Callable[[str], None]] = None) -> bool:
         """
         Install the specified Wine components into the given prefix using winetricks.
         If specific_components is None, use the default set (fontsmooth=rgb, xact, xact_x64, vcrun2022).
+        
+        Args:
+            wineprefix: Path to Wine prefix
+            game_var: Game name for logging
+            specific_components: Optional list of specific components to install
+            status_callback: Optional callback function(status_message: str) for progress updates
         """
         if not self.is_available():
             self.logger.error("Winetricks is not available")
@@ -268,11 +274,18 @@ class WinetricksHandler:
 
         if not all_components:
             self.logger.info("No Wine components to install.")
+            if status_callback:
+                status_callback("No Wine components to install")
             return True
 
         # Reorder components for proper installation sequence
         components_to_install = self._reorder_components_for_installation(all_components)
         self.logger.info(f"WINEPREFIX: {wineprefix}, Game: {game_var}, Ordered Components: {components_to_install}")
+        
+        # Show status with component list
+        if status_callback:
+            components_list = ', '.join(components_to_install)
+            status_callback(f"Installing Wine components: {components_list}")
 
         # Check user preference for component installation method
         from ..handlers.config_handler import ConfigHandler
@@ -290,7 +303,7 @@ class WinetricksHandler:
         # Choose installation method based on user preference
         if method == 'system_protontricks':
             self.logger.info("Using system protontricks for all components")
-            return self._install_components_protontricks_only(components_to_install, wineprefix, game_var)
+            return self._install_components_protontricks_only(components_to_install, wineprefix, game_var, status_callback)
         # else: method == 'winetricks' (default behavior continues below)
 
         # Install all components together with winetricks (faster)
@@ -358,6 +371,9 @@ class WinetricksHandler:
                     # Verify components were actually installed
                     if self._verify_components_installed(wineprefix, components_to_install, env):
                         self.logger.info("Component verification successful - all components installed correctly.")
+                        components_list = ', '.join(components_to_install)
+                        if status_callback:
+                            status_callback(f"Wine components installed and verified: {components_list}")
                         # Set Windows 10 mode after component installation (matches legacy script timing)
                         self._set_windows_10_mode(wineprefix, env.get('WINE', ''))
                         return True
@@ -461,7 +477,7 @@ class WinetricksHandler:
                     self.logger.warning("=" * 80)
 
                     # Attempt fallback to protontricks
-                    fallback_success = self._install_components_protontricks_only(components_to_install, wineprefix, game_var)
+                    fallback_success = self._install_components_protontricks_only(components_to_install, wineprefix, game_var, status_callback)
 
                     if fallback_success:
                         self.logger.info("SUCCESS: Protontricks fallback succeeded where winetricks failed")
@@ -698,7 +714,7 @@ class WinetricksHandler:
         except Exception as e:
             self.logger.warning(f"Error setting Windows 10 mode: {e}")
 
-    def _install_components_protontricks_only(self, components: list, wineprefix: str, game_var: str) -> bool:
+    def _install_components_protontricks_only(self, components: list, wineprefix: str, game_var: str, status_callback: Optional[Callable[[str], None]] = None) -> bool:
         """
         Install all components using protontricks only.
         This matches the behavior of the original bash script.
@@ -732,6 +748,9 @@ class WinetricksHandler:
                 return False
 
             # Install all components using protontricks
+            components_list = ', '.join(components)
+            if status_callback:
+                status_callback(f"Installing Wine components via protontricks: {components_list}")
             success = protontricks_handler.install_wine_components(appid, game_var, components)
 
             if success:

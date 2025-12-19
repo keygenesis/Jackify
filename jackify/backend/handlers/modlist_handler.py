@@ -722,7 +722,7 @@ class ModlistHandler:
         try:
             self.logger.info("Installing Wine components using user's preferred method...")
             self.logger.debug(f"Calling winetricks_handler.install_wine_components with wineprefix={wineprefix}, game_var={self.game_var_full}, components={components}")
-            success = self.winetricks_handler.install_wine_components(wineprefix, self.game_var_full, specific_components=components)
+            success = self.winetricks_handler.install_wine_components(wineprefix, self.game_var_full, specific_components=components, status_callback=status_callback)
             if success:
                 self.logger.info("Wine component installation completed successfully")
                 if status_callback:

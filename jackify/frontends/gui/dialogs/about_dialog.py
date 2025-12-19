@@ -379,18 +379,44 @@ Python: {platform.python_version()}"""
     def open_github(self):
         """Open GitHub repository."""
         try:
-            import webbrowser
-            webbrowser.open("https://github.com/Omni-guides/Jackify")
+            self._open_url("https://github.com/Omni-guides/Jackify")
         except Exception as e:
             logger.error(f"Error opening GitHub: {e}")
-    
+
     def open_nexus(self):
         """Open Nexus Mods page."""
         try:
-            import webbrowser
-            webbrowser.open("https://www.nexusmods.com/site/mods/1427")
+            self._open_url("https://www.nexusmods.com/site/mods/1427")
         except Exception as e:
             logger.error(f"Error opening Nexus: {e}")
+
+    def _open_url(self, url: str):
+        """Open URL with clean environment to avoid AppImage library conflicts."""
+        import os
+
+        env = os.environ.copy()
+
+        # Remove AppImage-specific environment variables
+        appimage_vars = [
+            'LD_LIBRARY_PATH',
+            'PYTHONPATH',
+            'PYTHONHOME',
+            'QT_PLUGIN_PATH',
+            'QML2_IMPORT_PATH',
+        ]
+
+        if 'APPIMAGE' in env or 'APPDIR' in env:
+            for var in appimage_vars:
+                if var in env:
+                    del env[var]
+
+        subprocess.Popen(
+            ['xdg-open', url],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
     
     def closeEvent(self, event):
         """Handle dialog close event."""

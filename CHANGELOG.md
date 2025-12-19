@@ -1,5 +1,29 @@
 # Jackify Changelog
 
+## v0.2.0.1 - Critical Bugfix Release
+**Release Date:** 2025-12-15
+
+### Critical Bug Fixes
+- **Directory Safety Validation**: Fixed data loss bug where directories with only a `downloads/` folder were incorrectly identified as valid modlist directories
+- **Flatpak Steam Restart**: Fixed Steam restart failures on Ubuntu/PopOS by removing incompatible `-foreground` flag and increasing startup wait
+
+### Bug Fixes
+- **External Links**: Fixed Ko-fi, GitHub, and Nexus links not opening on some distros using xdg-open with clean environment
+- **TTW Console Output**: Filtered standalone "OK"/"DONE" noise messages from TTW installation console
+- **Activity Window**: Fixed progress display updates in TTW Installer and other workflows
+- **Wine Component Installation**: Added status feedback during component installation showing component list
+- **Progress Parser**: Added defensive checks to prevent segfaults from malformed engine output
+- **Progress Parser Speed Info**: Fixed 'OperationType' object has no attribute 'lower' error by converting enum to string value when extracting speed info from timestamp status patterns
+
+### Improvements
+- **Default Wine Components**: Added dxvk to default component list for better graphics compatibility
+- **TTW Installer UI**: Show version numbers in status displays
+
+### Engine Updates
+- **jackify-engine 0.4.1**: Download reliability fixes, BSA case sensitivity handling, external drive I/O limiting, GPU detection caching, and texture processing performance improvements
+
+---
+
 ## v0.2.0 - Modlist Gallery, OAuth Authentication & Performance Improvements
 **Release Date:** 2025-12-06
 

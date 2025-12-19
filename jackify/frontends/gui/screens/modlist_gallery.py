@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy, QDialog, QTextEdit, QTextBrowser, QMessageBox, QListWidget
 )
 from PySide6.QtCore import Qt, Signal, QSize, QThread, QUrl, QTimer, QObject
-from PySide6.QtGui import QPixmap, QFont, QDesktopServices, QPainter, QColor, QTextOption, QPalette
+from PySide6.QtGui import QPixmap, QFont, QPainter, QColor, QTextOption, QPalette
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from pathlib import Path
 from typing import List, Optional, Dict
@@ -536,7 +536,7 @@ class ModlistDetailDialog(QDialog):
                         background: #3C45A5;
                     }
                 """)
-                discord_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.metadata.links.discordURL)))
+                discord_btn.clicked.connect(lambda: self._open_url(self.metadata.links.discordURL))
                 links_layout.addWidget(discord_btn)
             
             if self.metadata.links.websiteURL:
@@ -558,7 +558,7 @@ class ModlistDetailDialog(QDialog):
                         background: #2a2a2a;
                     }
                 """)
-                website_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.metadata.links.websiteURL)))
+                website_btn.clicked.connect(lambda: self._open_url(self.metadata.links.websiteURL))
                 links_layout.addWidget(website_btn)
             
             if self.metadata.links.readme:
@@ -581,7 +581,7 @@ class ModlistDetailDialog(QDialog):
                     }
                 """)
                 readme_url = self._convert_raw_github_url(self.metadata.links.readme)
-                readme_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(readme_url)))
+                readme_btn.clicked.connect(lambda: self._open_url(readme_url))
                 links_layout.addWidget(readme_btn)
         
         bottom_bar.addLayout(links_layout)
@@ -731,6 +731,35 @@ class ModlistDetailDialog(QDialog):
         """Handle install button click"""
         self.install_requested.emit(self.metadata)
         self.accept()
+
+    def _open_url(self, url: str):
+        """Open URL with clean environment to avoid AppImage library conflicts."""
+        import subprocess
+        import os
+
+        env = os.environ.copy()
+
+        # Remove AppImage-specific environment variables
+        appimage_vars = [
+            'LD_LIBRARY_PATH',
+            'PYTHONPATH',
+            'PYTHONHOME',
+            'QT_PLUGIN_PATH',
+            'QML2_IMPORT_PATH',
+        ]
+
+        if 'APPIMAGE' in env or 'APPDIR' in env:
+            for var in appimage_vars:
+                if var in env:
+                    del env[var]
+
+        subprocess.Popen(
+            ['xdg-open', url],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
 
 
 class ModlistGalleryDialog(QDialog):

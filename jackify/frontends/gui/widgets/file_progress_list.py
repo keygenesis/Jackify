@@ -105,6 +105,8 @@ class FileProgressItem(QWidget):
         self.file_progress = file_progress
         self._target_percent = file_progress.percent  # Target value for smooth animation
         self._current_display_percent = file_progress.percent  # Currently displayed value
+        self._spinner_position = 0  # For custom indeterminate spinner animation (0-200 range for smooth wraparound)
+        self._is_indeterminate = False  # Track if we're in indeterminate mode
         self._animation_timer = QTimer(self)
         self._animation_timer.timeout.connect(self._animate_progress)
         self._animation_timer.setInterval(16)  # ~60fps for smooth animation
@@ -239,10 +241,32 @@ class FileProgressItem(QWidget):
                 self.progress_bar.setRange(0, 100)
                 # Progress bar value will be updated by animation timer
             else:
-                # Indeterminate if no max - use Qt's built-in smooth animation
+                # No max for summary - use custom animated spinner
+                self._is_indeterminate = True
                 self.percent_label.setText("")
                 self.speed_label.setText("")
-                self.progress_bar.setRange(0, 0)  # Qt handles animation smoothly
+                self.progress_bar.setRange(0, 100)  # Use determinate range for custom animation
+                if not self._animation_timer.isActive():
+                    self._animation_timer.start()
+            return
+
+        # Check if this is a queued item (not yet started)
+        # Queued items have total_size > 0 but percent == 0, current_size == 0, speed <= 0
+        is_queued = (
+            self.file_progress.total_size > 0 and
+            self.file_progress.percent == 0 and
+            self.file_progress.current_size == 0 and
+            self.file_progress.speed <= 0
+        )
+
+        if is_queued:
+            # Queued download - show "Queued" text with empty progress bar
+            self._is_indeterminate = False
+            self._animation_timer.stop()
+            self.percent_label.setText("Queued")
+            self.speed_label.setText("")
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
             return
 
         # Check if we have meaningful progress data
@@ -253,49 +277,69 @@ class FileProgressItem(QWidget):
             (self.file_progress.speed > 0 and self.file_progress.percent >= 0)
         )
 
-        # Use determinate mode if we have actual progress data, otherwise use Qt's indeterminate mode
+        # Use determinate mode if we have actual progress data, otherwise use custom animated spinner
         if has_meaningful_progress:
+            # Normal progress mode
+            self._is_indeterminate = False
             # Update target for smooth animation
             self._target_percent = max(0, self.file_progress.percent)
-            
+
             # Start animation timer if not already running
             if not self._animation_timer.isActive():
                 self._animation_timer.start()
-            
+
             # Update speed label immediately (doesn't need animation)
             self.speed_label.setText(self.file_progress.speed_display)
             self.progress_bar.setRange(0, 100)
             # Progress bar value will be updated by animation timer
         else:
-            # No progress data (e.g., texture conversions) - Qt's indeterminate mode
-            self._animation_timer.stop()  # Stop animation for indeterminate items
-            self.percent_label.setText("")  # No percentage
+            # No progress data (e.g., texture conversions, BSA building) - use custom animated spinner
+            self._is_indeterminate = True
+            self.percent_label.setText("")  # Clear percent label
             self.speed_label.setText("")  # No speed
-            self.progress_bar.setRange(0, 0)  # Qt handles smooth indeterminate animation
+            self.progress_bar.setRange(0, 100)  # Use determinate range for custom animation
+            # Start animation timer for custom spinner
+            if not self._animation_timer.isActive():
+                self._animation_timer.start()
 
     def _animate_progress(self):
-        """Smoothly animate progress bar from current to target value."""
-        # Calculate difference
-        diff = self._target_percent - self._current_display_percent
-        
-        # If very close, snap to target and stop animation
-        if abs(diff) < 0.1:
-            self._current_display_percent = self._target_percent
-            self._animation_timer.stop()
+        """Smoothly animate progress bar from current to target value, or animate spinner."""
+        if self._is_indeterminate:
+            # Custom indeterminate spinner animation
+            # Use a bouncing/pulsing effect: position moves 0-100-0 smoothly
+            # Increment by 4 units per frame for fast animation (full cycle in ~0.8s at 60fps)
+            self._spinner_position = (self._spinner_position + 4) % 200
+
+            # Create bouncing effect: 0->100->0
+            if self._spinner_position < 100:
+                display_value = self._spinner_position
+            else:
+                display_value = 200 - self._spinner_position
+
+            self.progress_bar.setValue(display_value)
         else:
-            # Smooth interpolation (ease-out for natural feel)
-            # Move 20% of remaining distance per frame (~60fps = smooth)
-            self._current_display_percent += diff * 0.2
-        
-        # Update display
-        display_percent = max(0, min(100, self._current_display_percent))
-        self.progress_bar.setValue(int(display_percent))
-        
-        # Update percentage label
-        if self.file_progress.percent > 0:
-            self.percent_label.setText(f"{display_percent:.0f}%")
-        else:
-            self.percent_label.setText("")
+            # Normal progress animation
+            # Calculate difference
+            diff = self._target_percent - self._current_display_percent
+
+            # If very close, snap to target and stop animation
+            if abs(diff) < 0.1:
+                self._current_display_percent = self._target_percent
+                self._animation_timer.stop()
+            else:
+                # Smooth interpolation (ease-out for natural feel)
+                # Move 20% of remaining distance per frame (~60fps = smooth)
+                self._current_display_percent += diff * 0.2
+
+            # Update display
+            display_percent = max(0, min(100, self._current_display_percent))
+            self.progress_bar.setValue(int(display_percent))
+
+            # Update percentage label
+            if self.file_progress.percent > 0:
+                self.percent_label.setText(f"{display_percent:.0f}%")
+            else:
+                self.percent_label.setText("")
     
     def update_progress(self, file_progress: FileProgress):
         """Update with new progress data."""
@@ -558,30 +602,35 @@ class FileProgressList(QWidget):
                 item_key = file_progress.filename
             
             if item_key in self._file_items:
-                # Update existing - ensure it's in the right position
+                # Update existing widget - DO NOT reorder items (causes segfaults)
+                # Reordering with takeItem/insertItem can delete widgets and cause crashes
+                # Order is less important than stability - just update the widget in place
                 item_widget = self._file_items[item_key]
-                item_widget.update_progress(file_progress)
-
-                # Find the item in the list and move it if needed
-                for i in range(self.list_widget.count()):
-                    item = self.list_widget.item(i)
-                    if item and item.data(Qt.UserRole) == item_key:
-                        # Item is at position i, should be at position idx
-                        if i != idx:
-                            # Take item from current position and insert at correct position
-                            taken_item = self.list_widget.takeItem(i)
-                            self.list_widget.insertItem(idx, taken_item)
-                            self.list_widget.setItemWidget(taken_item, item_widget)
-                        break
-            else:
-                # Add new - insert at specific position (idx) to maintain order
-                item_widget = FileProgressItem(file_progress)
-                list_item = QListWidgetItem()
-                list_item.setSizeHint(item_widget.sizeHint())
-                list_item.setData(Qt.UserRole, item_key)  # Use stable key
-                self.list_widget.insertItem(idx, list_item)  # Insert at specific position
-                self.list_widget.setItemWidget(list_item, item_widget)
-                self._file_items[item_key] = item_widget
+                # CRITICAL: Check widget is still valid before updating
+                if shiboken6.isValid(item_widget):
+                    try:
+                        item_widget.update_progress(file_progress)
+                    except RuntimeError:
+                        # Widget was deleted - remove from dict and create new one below
+                        del self._file_items[item_key]
+                        # Fall through to create new widget
+                    else:
+                        # Update successful - skip creating new widget
+                        continue
+                else:
+                    # Widget invalid - remove from dict and create new one
+                    del self._file_items[item_key]
+                    # Fall through to create new widget
+            # Create new widget (either because it didn't exist or was invalid)
+            # CRITICAL: Use addItem instead of insertItem to avoid position conflicts
+            # Order is less important than stability - addItem is safer than insertItem
+            item_widget = FileProgressItem(file_progress)
+            list_item = QListWidgetItem()
+            list_item.setSizeHint(item_widget.sizeHint())
+            list_item.setData(Qt.UserRole, item_key)  # Use stable key
+            self.list_widget.addItem(list_item)  # Use addItem for safety (avoids segfaults)
+            self.list_widget.setItemWidget(list_item, item_widget)
+            self._file_items[item_key] = item_widget
 
         # Update last phase tracker
         if current_phase:

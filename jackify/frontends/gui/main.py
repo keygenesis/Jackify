@@ -101,7 +101,7 @@ src_dir = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(src_dir))
 
 from PySide6.QtWidgets import (
-    QSizePolicy,
+    QSizePolicy, QScrollArea,
     QApplication, QMainWindow, QWidget, QLabel, QVBoxLayout, QPushButton,
     QStackedWidget, QHBoxLayout, QDialog, QFormLayout, QLineEdit, QCheckBox, QSpinBox, QMessageBox, QGroupBox, QGridLayout, QFileDialog, QToolButton, QStyle, QComboBox, QTabWidget, QRadioButton, QButtonGroup
 )
@@ -171,8 +171,8 @@ class SettingsDialog(QDialog):
             self._original_debug_mode = self.config_handler.get('debug_mode', False)
             self.setWindowTitle("Settings")
             self.setModal(True)
-            self.setMinimumWidth(650)  # Reduced width for Steam Deck compatibility
-            self.setMaximumWidth(800)   # Maximum width to prevent excessive stretching
+            self.setMinimumWidth(650)
+            self.setMaximumWidth(800)
             self.setStyleSheet("QDialog { background-color: #232323; color: #eee; } QPushButton:hover { background-color: #333; }")
 
             main_layout = QVBoxLayout()
@@ -420,69 +420,119 @@ class SettingsDialog(QDialog):
 
         resource_group = QGroupBox("Resource Limits")
         resource_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
-        resource_layout = QGridLayout()
-        resource_group.setLayout(resource_layout)
-        resource_layout.setVerticalSpacing(4)
-        resource_layout.setHorizontalSpacing(8)
-        resource_layout.addWidget(self._bold_label("Resource"), 0, 0, 1, 1, Qt.AlignLeft)
-        resource_layout.addWidget(self._bold_label("Max Tasks"), 0, 1, 1, 1, Qt.AlignLeft)
+        resource_outer_layout = QVBoxLayout()
+        resource_group.setLayout(resource_outer_layout)
+
         self.resource_settings_path = os.path.expanduser("~/.config/jackify/resource_settings.json")
         self.resource_settings = self._load_json(self.resource_settings_path)
         self.resource_edits = {}
-        resource_row_index = 0
-        for resource_row_index, (k, v) in enumerate(self.resource_settings.items(), start=1):
-            try:
-                # Create resource label
-                resource_layout.addWidget(QLabel(f"{k}:", parent=self), resource_row_index, 0, 1, 1, Qt.AlignLeft)
-
-                max_tasks_spin = QSpinBox()
-                max_tasks_spin.setMinimum(1)
-                max_tasks_spin.setMaximum(128)
-                max_tasks_spin.setValue(v.get('MaxTasks', 16))
-                max_tasks_spin.setToolTip("Maximum number of concurrent tasks for this resource.")
-                max_tasks_spin.setFixedWidth(160)
-                resource_layout.addWidget(max_tasks_spin, resource_row_index, 1)
-
-                # Store the widgets
-                self.resource_edits[k] = (None, max_tasks_spin)
-            except Exception as e:
-                print(f"[ERROR] Failed to create widgets for resource '{k}': {e}")
-                continue
 
         # If no resources exist, show helpful message
-        if not self.resource_edits:
+        if not self.resource_settings:
             info_label = QLabel("Resource Limit settings will be generated once a modlist install action is performed")
             info_label.setStyleSheet("color: #aaa; font-style: italic; padding: 20px; font-size: 11pt;")
             info_label.setWordWrap(True)
             info_label.setAlignment(Qt.AlignCenter)
-            info_label.setMinimumHeight(60)  # Ensure enough height to prevent cutoff
-            resource_layout.addWidget(info_label, 1, 0, 3, 2)  # Span more rows for better space
-
-        # Bandwidth limiter row (only show if Downloads resource exists)
-        if "Downloads" in self.resource_settings:
-            downloads_throughput_bytes = self.resource_settings["Downloads"].get("MaxThroughput", 0)
-            # Convert bytes/s to KB/s for display
-            downloads_throughput_kb = downloads_throughput_bytes // 1024 if downloads_throughput_bytes > 0 else 0
-
-            self.bandwidth_spin = QSpinBox()
-            self.bandwidth_spin.setMinimum(0)
-            self.bandwidth_spin.setMaximum(1000000)
-            self.bandwidth_spin.setValue(downloads_throughput_kb)
-            self.bandwidth_spin.setSuffix(" KB/s")
-            self.bandwidth_spin.setFixedWidth(160)
-            self.bandwidth_spin.setToolTip("Set the maximum download speed for modlist downloads. 0 = unlimited.")
-            bandwidth_note = QLabel("(0 = unlimited)")
-            bandwidth_note.setStyleSheet("color: #aaa; font-size: 10pt;")
-            # Create horizontal layout for bandwidth row
-            bandwidth_row = QHBoxLayout()
-            bandwidth_row.addWidget(self.bandwidth_spin)
-            bandwidth_row.addWidget(bandwidth_note)
-            bandwidth_row.addStretch()  # Push to the left
-
-            resource_layout.addWidget(QLabel("Bandwidth Limit:", parent=self), resource_row_index+1, 0, 1, 1, Qt.AlignLeft)
-            resource_layout.addLayout(bandwidth_row, resource_row_index+1, 1)
+            info_label.setMinimumHeight(60)
+            resource_outer_layout.addWidget(info_label)
         else:
-            self.bandwidth_spin = None  # No bandwidth UI if Downloads resource doesn't exist
+            # Two-column layout for better space usage
+            # Use a single grid with proper column spacing
+            resource_grid = QGridLayout()
+            resource_grid.setVerticalSpacing(4)
+            resource_grid.setHorizontalSpacing(8)
+            resource_grid.setColumnMinimumWidth(2, 40)  # Spacing between columns
+
+            # Headers for left column (columns 0-1)
+            resource_grid.addWidget(self._bold_label("Resource"), 0, 0, 1, 1, Qt.AlignLeft)
+            resource_grid.addWidget(self._bold_label("Max Tasks"), 0, 1, 1, 1, Qt.AlignLeft)
+
+            # Headers for right column (columns 3-4, skip column 2 for spacing)
+            resource_grid.addWidget(self._bold_label("Resource"), 0, 3, 1, 1, Qt.AlignLeft)
+            resource_grid.addWidget(self._bold_label("Max Tasks"), 0, 4, 1, 1, Qt.AlignLeft)
+
+            # Split resources between left and right columns (4 + 4)
+            resource_items = list(self.resource_settings.items())
+
+            # Find Bandwidth info from Downloads resource if it exists
+            bandwidth_kb = 0
+            if "Downloads" in self.resource_settings:
+                downloads_throughput_bytes = self.resource_settings["Downloads"].get("MaxThroughput", 0)
+                bandwidth_kb = downloads_throughput_bytes // 1024 if downloads_throughput_bytes > 0 else 0
+
+            # Left column gets first 4 resources (columns 0-1)
+            left_row = 1
+            for k, v in resource_items[:4]:
+                try:
+                    resource_grid.addWidget(QLabel(f"{k}:", parent=self), left_row, 0, 1, 1, Qt.AlignLeft)
+
+                    max_tasks_spin = QSpinBox()
+                    max_tasks_spin.setMinimum(1)
+                    max_tasks_spin.setMaximum(128)
+                    max_tasks_spin.setValue(v.get('MaxTasks', 16))
+                    max_tasks_spin.setToolTip("Maximum number of concurrent tasks for this resource.")
+                    max_tasks_spin.setFixedWidth(100)
+                    resource_grid.addWidget(max_tasks_spin, left_row, 1)
+
+                    self.resource_edits[k] = (None, max_tasks_spin)
+                    left_row += 1
+                except Exception as e:
+                    print(f"[ERROR] Failed to create widgets for resource '{k}': {e}")
+                    continue
+
+            # Right column gets next 4 resources (columns 3-4, skip column 2 for spacing)
+            right_row = 1
+            for k, v in resource_items[4:]:
+                try:
+                    resource_grid.addWidget(QLabel(f"{k}:", parent=self), right_row, 3, 1, 1, Qt.AlignLeft)
+
+                    max_tasks_spin = QSpinBox()
+                    max_tasks_spin.setMinimum(1)
+                    max_tasks_spin.setMaximum(128)
+                    max_tasks_spin.setValue(v.get('MaxTasks', 16))
+                    max_tasks_spin.setToolTip("Maximum number of concurrent tasks for this resource.")
+                    max_tasks_spin.setFixedWidth(100)
+                    resource_grid.addWidget(max_tasks_spin, right_row, 4)
+
+                    self.resource_edits[k] = (None, max_tasks_spin)
+                    right_row += 1
+                except Exception as e:
+                    print(f"[ERROR] Failed to create widgets for resource '{k}': {e}")
+                    continue
+
+            # Add Bandwidth Limit at the bottom of right column
+            if "Downloads" in self.resource_settings:
+                resource_grid.addWidget(QLabel("Bandwidth Limit:", parent=self), right_row, 3, 1, 1, Qt.AlignLeft)
+
+                self.bandwidth_spin = QSpinBox()
+                self.bandwidth_spin.setMinimum(0)
+                self.bandwidth_spin.setMaximum(1000000)
+                self.bandwidth_spin.setValue(bandwidth_kb)
+                self.bandwidth_spin.setSuffix(" KB/s")
+                self.bandwidth_spin.setFixedWidth(100)
+                self.bandwidth_spin.setToolTip("Set the maximum download speed for modlist downloads. 0 = unlimited.")
+
+                # Create a layout for the spinbox and note
+                bandwidth_widget_layout = QHBoxLayout()
+                bandwidth_widget_layout.setContentsMargins(0, 0, 0, 0)
+                bandwidth_widget_layout.addWidget(self.bandwidth_spin)
+
+                bandwidth_note = QLabel("(0 = unlimited)")
+                bandwidth_note.setStyleSheet("color: #aaa; font-size: 9pt;")
+                bandwidth_widget_layout.addWidget(bandwidth_note)
+                bandwidth_widget_layout.addStretch()
+
+                # Create container widget for the layout
+                bandwidth_container = QWidget()
+                bandwidth_container.setLayout(bandwidth_widget_layout)
+                resource_grid.addWidget(bandwidth_container, right_row, 4, 1, 1, Qt.AlignLeft)
+            else:
+                self.bandwidth_spin = None
+
+            # Add stretch column at the end to push content left
+            resource_grid.setColumnStretch(5, 1)
+
+            resource_outer_layout.addLayout(resource_grid)
 
         advanced_layout.addWidget(resource_group)
 
@@ -1358,10 +1408,11 @@ class JackifyMainWindow(QMainWindow):
         bottom_bar_layout.addStretch(1)
 
         # Ko-Fi support link (center)
-        kofi_link = QLabel('<a href="https://ko-fi.com/omni1" style="color:#72A5F2; text-decoration:none;">♥ Support on Ko-fi</a>')
+        kofi_link = QLabel('<a href="#" style="color:#72A5F2; text-decoration:none;">♥ Support on Ko-fi</a>')
         kofi_link.setStyleSheet("color: #72A5F2; font-size: 13px;")
         kofi_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
-        kofi_link.setOpenExternalLinks(True)
+        kofi_link.setOpenExternalLinks(False)
+        kofi_link.linkActivated.connect(lambda: self._open_url("https://ko-fi.com/omni1"))
         kofi_link.setToolTip("Support Jackify development")
         bottom_bar_layout.addWidget(kofi_link, alignment=Qt.AlignCenter)
 
@@ -1629,6 +1680,35 @@ class JackifyMainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
 
+    def _open_url(self, url: str):
+        """Open URL with clean environment to avoid AppImage library conflicts."""
+        import subprocess
+        import os
+
+        env = os.environ.copy()
+
+        # Remove AppImage-specific environment variables
+        appimage_vars = [
+            'LD_LIBRARY_PATH',
+            'PYTHONPATH',
+            'PYTHONHOME',
+            'QT_PLUGIN_PATH',
+            'QML2_IMPORT_PATH',
+        ]
+
+        if 'APPIMAGE' in env or 'APPDIR' in env:
+            for var in appimage_vars:
+                if var in env:
+                    del env[var]
+
+        subprocess.Popen(
+            ['xdg-open', url],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+
     def _on_child_resize_request(self, mode: str):
         """
         Handle child screen resize requests (expand/collapse console).
@@ -1761,6 +1841,20 @@ def resource_path(relative_path):
 
 def main():
     """Main entry point for the GUI application"""
+    # CRITICAL: Enable faulthandler for segfault debugging
+    # This will print Python stack traces on segfault
+    import faulthandler
+    import signal
+    # Enable faulthandler to both stderr and file
+    try:
+        log_dir = Path.home() / '.local' / 'share' / 'jackify' / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        trace_file = open(log_dir / 'segfault_trace.txt', 'w')
+        faulthandler.enable(file=trace_file, all_threads=True)
+    except Exception:
+        # Fallback to stderr only if file can't be opened
+        faulthandler.enable(all_threads=True)
+    
     # Check for CLI mode argument
     if len(sys.argv) > 1 and '--cli' in sys.argv:
         # Launch CLI frontend instead of GUI

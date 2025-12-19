@@ -300,7 +300,7 @@ class ValidationHandler:
     def looks_like_modlist_dir(self, path: Path) -> bool:
         """Return True if the directory contains files/folders typical of a modlist install."""
         expected = [
-            'ModOrganizer.exe', 'profiles', 'mods', 'downloads', '.wabbajack', '.jackify_modlist_marker', 'ModOrganizer.ini'
+            'ModOrganizer.exe', 'profiles', 'mods', '.wabbajack', '.jackify_modlist_marker', 'ModOrganizer.ini'
         ]
         for item in expected:
             if (path / item).exists():

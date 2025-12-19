@@ -123,7 +123,7 @@ class InstallationProgress:
             return ""
     
     def get_overall_speed_display(self) -> str:
-        """Get overall speed display from speeds dict or sum of active files."""
+        """Get overall speed display from aggregate speeds reported by engine."""
         def _fresh_speed(op_key: str) -> float:
             """Return speed if recently updated, else 0."""
             if op_key not in self.speeds:
@@ -134,8 +134,14 @@ class InstallationProgress:
             if time.time() - updated_at > 2.0:
                 return 0.0
             return max(0.0, self.speeds.get(op_key, 0.0))
-        
-        # Prefer aggregate speeds that match the current phase
+
+        # CRITICAL FIX: Use aggregate speeds from engine status lines
+        # The engine reports accurate total speeds in lines like:
+        # "[00:00:10] Downloading Mod Archives (17/214) - 6.8MB/s"
+        # These aggregate speeds are stored in self.speeds dict and are the source of truth
+        # DO NOT sum individual file speeds - that inflates the total incorrectly
+
+        # Try to get speed for current phase first
         phase_operation_map = {
             InstallationPhase.DOWNLOAD: 'download',
             InstallationPhase.EXTRACT: 'extract',
@@ -147,22 +153,13 @@ class InstallationProgress:
             op_speed = _fresh_speed(active_op)
             if op_speed > 0:
                 return FileProgress._format_bytes(int(op_speed)) + "/s"
-        
+
         # Otherwise check other operations in priority order
         for op_key in ['download', 'extract', 'validate', 'install']:
             op_speed = _fresh_speed(op_key)
             if op_speed > 0:
                 return FileProgress._format_bytes(int(op_speed)) + "/s"
-        
-        # If engine didn't report aggregate speed, fall back to summing active file speeds
-        if self.active_files:
-            total_speed = sum(
-                fp.speed
-                for fp in self.active_files
-                if fp.speed > 0 and not fp.is_complete
-            )
-            if total_speed > 0:
-                return FileProgress._format_bytes(int(total_speed)) + "/s"
+
         return ""
     
     def get_phase_label(self) -> str:
