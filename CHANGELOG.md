@@ -1,5 +1,13 @@
 # Jackify Changelog
 
+## v0.2.0.2 - Emergency Engine Bugfix
+**Release Date:** 2025-12-18
+
+### Engine Updates
+- **jackify-engine 0.4.2**: Fixed OOM issue with jackify-engine 0.4.1 due to array size
+
+---
+
 ## v0.2.0.1 - Critical Bugfix Release
 **Release Date:** 2025-12-15
 
