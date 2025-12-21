@@ -1,7 +1,7 @@
 # Jackify Changelog
 
 ## v0.2.0.3 - Engine Bugfix & Settings Cleanup
-**Release Date:** 2025-12-18
+**Release Date:** 2025-12-21
 
 ### Engine Updates
 - **jackify-engine 0.4.3**: Bugfix release
