@@ -1,5 +1,16 @@
 # Jackify Changelog
 
+## v0.2.0.3 - Engine Bugfix & Settings Cleanup
+**Release Date:** 2025-12-18
+
+### Engine Updates
+- **jackify-engine 0.4.3**: Bugfix release
+
+### UI Improvements
+- **Settings Dialog**: Removed GPU disable toggle - GPU usage is now always enabled (the disable option was non-functional)
+
+---
+
 ## v0.2.0.2 - Emergency Engine Bugfix
 **Release Date:** 2025-12-18
 

@@ -536,41 +536,6 @@ class SettingsDialog(QDialog):
 
         advanced_layout.addWidget(resource_group)
 
-        # --- GPU Texture Conversion Section ---
-        gpu_group = QGroupBox("Texture Conversion")
-        gpu_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
-        gpu_layout = QVBoxLayout()
-        gpu_group.setLayout(gpu_layout)
-
-        gpu_description = QLabel(
-            "Control whether jackify-engine uses GPU acceleration during texture conversion. "
-            "GPU acceleration significantly speeds up modlist installation but requires compatible hardware."
-        )
-        gpu_description.setWordWrap(True)
-        gpu_description.setStyleSheet("color: #ccc; font-size: 10pt;")
-        gpu_layout.addWidget(gpu_description)
-
-        self.gpu_button_group = QButtonGroup()
-        current_gpu_enabled = self.config_handler.get("enable_gpu_texture_conversion", True)
-
-        self.gpu_enabled_radio = QRadioButton("Enable GPU for Texture Conversion (default)")
-        self.gpu_enabled_radio.setToolTip("Use GPU acceleration for faster texture processing during installation.")
-        self.gpu_enabled_radio.setChecked(current_gpu_enabled)
-        self.gpu_button_group.addButton(self.gpu_enabled_radio, 0)
-        gpu_layout.addWidget(self.gpu_enabled_radio)
-
-        self.gpu_disabled_radio = QRadioButton("Disable GPU (CPU only)")
-        self.gpu_disabled_radio.setToolTip("Use CPU-only texture processing (slower but more compatible).")
-        self.gpu_disabled_radio.setChecked(not current_gpu_enabled)
-        self.gpu_button_group.addButton(self.gpu_disabled_radio, 1)
-        gpu_layout.addWidget(self.gpu_disabled_radio)
-
-        gpu_note = QLabel("Note: Disabling GPU may significantly increase installation time for large modlists.")
-        gpu_note.setStyleSheet("color: #aaa; font-size: 9pt;")
-        gpu_layout.addWidget(gpu_note)
-
-        advanced_layout.addWidget(gpu_group)
-
         # Advanced Tool Options Section
         component_group = QGroupBox("Advanced Tool Options")
         component_group.setStyleSheet("QGroupBox { border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding: 8px; background: #23282d; } QGroupBox:title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; font-weight: bold; color: #fff; }")
@@ -979,11 +944,6 @@ class SettingsDialog(QDialog):
 
             self.config_handler.set("component_installation_method", method)
             self.config_handler.set("use_winetricks_for_components", method == 'winetricks')
-
-            # Save GPU texture conversion preference
-            if hasattr(self, "gpu_enabled_radio") and hasattr(self, "gpu_disabled_radio"):
-                gpu_enabled = self.gpu_enabled_radio.isChecked()
-                self.config_handler.set("enable_gpu_texture_conversion", gpu_enabled)
 
             # Force immediate save and verify
             save_result = self.config_handler.save_config()
