@@ -21,7 +21,8 @@ class LoggingHandler:
         logger = LoggingHandler().setup_logger('install_wabbajack', 'jackify-install-wabbajack.log')
     """
     def __init__(self):
-        self.log_dir = Path.home() / "Jackify" / "logs"
+        from jackify.shared.paths import get_jackify_logs_dir
+        self.log_dir = get_jackify_logs_dir()
         self.ensure_log_directory()
         
     def ensure_log_directory(self) -> None:

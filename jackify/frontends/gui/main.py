@@ -105,7 +105,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QVBoxLayout, QPushButton,
     QStackedWidget, QHBoxLayout, QDialog, QFormLayout, QLineEdit, QCheckBox, QSpinBox, QMessageBox, QGroupBox, QGridLayout, QFileDialog, QToolButton, QStyle, QComboBox, QTabWidget, QRadioButton, QButtonGroup
 )
-from PySide6.QtCore import Qt, QEvent, QTimer
+from PySide6.QtCore import Qt, QEvent, QTimer, QThread, Signal
 from PySide6.QtGui import QIcon
 import json
 
@@ -1533,58 +1533,42 @@ class JackifyMainWindow(QMainWindow):
             # Continue anyway - don't block startup on detection errors
     
     def _check_for_updates_on_startup(self):
-        """Check for updates on startup - SIMPLE VERSION"""
+        """Check for updates on startup - non-blocking background check"""
         try:
             debug_print("Checking for updates on startup...")
             
-            # Do it synchronously and simply
-            update_info = self.update_service.check_for_updates()
-            if update_info:
+            # Run update check in background thread to avoid blocking GUI startup
+            class UpdateCheckThread(QThread):
+                update_available = Signal(object)  # Signal to pass update_info to main thread
+                
+                def __init__(self, update_service):
+                    super().__init__()
+                    self.update_service = update_service
+                
+                def run(self):
+                    update_info = self.update_service.check_for_updates()
+                    if update_info:
+                        self.update_available.emit(update_info)
+            
+            def on_update_available(update_info):
+                """Handle update check result in main thread"""
                 debug_print(f"Update available: v{update_info.version}")
                 
-                # Simple QMessageBox - no complex dialogs
-                from PySide6.QtWidgets import QMessageBox
-                from PySide6.QtCore import QTimer
-                
+                # Show update dialog after a short delay to ensure GUI is fully loaded
                 def show_update_dialog():
-                    try:
-                        debug_print("Creating UpdateDialog...")
-                        from jackify.frontends.gui.dialogs.update_dialog import UpdateDialog
-                        dialog = UpdateDialog(update_info, self.update_service, self)
-                        debug_print("UpdateDialog created, showing...")
-                        dialog.show()  # Non-blocking
-                        debug_print("UpdateDialog shown successfully")
-                    except Exception as e:
-                        debug_print(f"UpdateDialog failed: {e}, falling back to simple dialog")
-                        # Fallback to simple dialog
-                        reply = QMessageBox.question(
-                            self, 
-                            "Update Available",
-                            f"Jackify v{update_info.version} is available.\n\nDownload and install now?",
-                            QMessageBox.Yes | QMessageBox.No,
-                            QMessageBox.Yes
-                        )
-                        if reply == QMessageBox.Yes:
-                            # Simple download and replace
-                            try:
-                                new_appimage = self.update_service.download_update(update_info)
-                                if new_appimage:
-                                    if self.update_service.apply_update(new_appimage):
-                                        debug_print("Update applied successfully")
-                                    else:
-                                        QMessageBox.warning(self, "Update Failed", "Failed to apply update.")
-                                else:
-                                    QMessageBox.warning(self, "Update Failed", "Failed to download update.")
-                            except Exception as e:
-                                QMessageBox.warning(self, "Update Failed", f"Update failed: {e}")
+                    from ..dialogs.update_dialog import UpdateDialog
+                    dialog = UpdateDialog(update_info, self.update_service, self)
+                    dialog.exec()
                 
-                # Use QTimer to show dialog after GUI is fully loaded
                 QTimer.singleShot(1000, show_update_dialog)
-            else:
-                debug_print("No updates available")
-                
+            
+            # Start background thread
+            self._update_thread = UpdateCheckThread(self.update_service)
+            self._update_thread.update_available.connect(on_update_available)
+            self._update_thread.start()
+            
         except Exception as e:
-            debug_print(f"Error checking for updates on startup: {e}")
+            debug_print(f"Error setting up update check: {e}")
             # Continue anyway - don't block startup on update check errors
     
     def cleanup_processes(self):

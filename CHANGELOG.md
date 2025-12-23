@@ -1,5 +1,27 @@
 # Jackify Changelog
 
+## v0.2.0.4 - Bugfixes & Improvements
+**Release Date:** 2025-12-23
+
+### Engine Updates
+- **jackify-engine 0.4.3**: Fixed case sensitivity issues, archive extraction crashes, and improved error messages
+
+### Bug Fixes
+- Fixed modlist gallery metadata showing outdated versions (now always fetches fresh data)
+- Fixed hardcoded ~/Jackify paths preventing custom data directory settings
+- Fixed update check blocking GUI startup
+- Improved Steam restart reliability (3-minute timeout, better error handling)
+- Fixed Protontricks Flatpak installation on Steam Deck
+
+### Backend Changes
+- GPU texture conversion now always enabled (config setting deprecated)
+
+### UI Improvements
+- Redesigned modlist detail view to show more of hero image
+- Improved gallery loading with animated feedback and faster initial load
+
+---
+
 ## v0.2.0.3 - Engine Bugfix & Settings Cleanup
 **Release Date:** 2025-12-21
 

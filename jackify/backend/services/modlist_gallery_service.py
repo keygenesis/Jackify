@@ -25,7 +25,8 @@ from jackify.shared.paths import get_jackify_data_dir
 class ModlistGalleryService:
     """Service for fetching and caching modlist metadata from jackify-engine"""
 
-    CACHE_VALIDITY_DAYS = 7  # Refresh cache after 7 days
+    # REMOVED: CACHE_VALIDITY_DAYS - metadata is now always fetched fresh from engine
+    # Images are still cached indefinitely (managed separately)
     # CRITICAL: Thread lock to prevent concurrent engine calls that could cause recursive spawning
     _engine_call_lock = threading.Lock()
 
@@ -59,31 +60,20 @@ class ModlistGalleryService:
         """
         Fetch modlist metadata from jackify-engine.
 
+        NOTE: Metadata is ALWAYS fetched fresh from the engine to ensure up-to-date
+        version numbers and sizes for frequently-updated modlists. Only images are cached.
+
         Args:
             include_validation: Include validation status (slower)
             include_search_index: Include mod search index (slower)
             sort_by: Sort order (title, size, date)
-            force_refresh: Force refresh even if cache is valid
+            force_refresh: Deprecated parameter (kept for API compatibility)
 
         Returns:
             ModlistMetadataResponse or None if fetch fails
         """
-        # Check cache first unless force refresh
-        # If include_search_index is True, check if cache has mods before using it
-        if not force_refresh:
-            cached = self._load_from_cache()
-            if cached and self._is_cache_valid():
-                # If we need search index, check if cached data has mods
-                if include_search_index:
-                    # Check if at least one modlist has mods (indicates cache was built with search index)
-                    has_mods = any(hasattr(m, 'mods') and m.mods for m in cached.modlists)
-                    if has_mods:
-                        return cached  # Cache has mods, use it
-                    # Cache doesn't have mods, need to fetch fresh
-                else:
-                    return cached  # Don't need search index, use cache
-
-        # Fetch fresh data from jackify-engine
+        # Always fetch fresh data from jackify-engine
+        # The engine itself is fast (~1-2 seconds) and always gets latest metadata
         try:
             metadata = self._fetch_from_engine(
                 include_validation=include_validation,
@@ -91,6 +81,7 @@ class ModlistGalleryService:
                 sort_by=sort_by
             )
 
+            # Still save to cache as a fallback for offline scenarios
             if metadata:
                 self._save_to_cache(metadata)
 
@@ -98,7 +89,8 @@ class ModlistGalleryService:
 
         except Exception as e:
             print(f"Error fetching modlist metadata: {e}")
-            # Fall back to cache if available
+            print("Falling back to cached metadata (may be outdated)")
+            # Fall back to cache if network/engine fails
             return self._load_from_cache()
 
     def _fetch_from_engine(
@@ -252,17 +244,6 @@ class ModlistGalleryService:
             }
 
         return result
-
-    def _is_cache_valid(self) -> bool:
-        """Check if cache is still valid based on age"""
-        if not self.METADATA_CACHE_FILE.exists():
-            return False
-
-        # Check file modification time
-        mtime = datetime.fromtimestamp(self.METADATA_CACHE_FILE.stat().st_mtime)
-        age = datetime.now() - mtime
-
-        return age < timedelta(days=self.CACHE_VALIDITY_DAYS)
 
     def download_images(
         self,

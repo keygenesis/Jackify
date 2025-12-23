@@ -680,7 +680,8 @@ class ModlistInstallCLI:
         start_time = time.time()
 
         # --- BEGIN: TEE LOGGING SETUP & LOG ROTATION ---
-        log_dir = Path.home() / "Jackify" / "logs"
+        from jackify.shared.paths import get_jackify_logs_dir
+        log_dir = get_jackify_logs_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         workflow_log_path = log_dir / "Modlist_Install_workflow.log"
         # Log rotation: keep last 3 logs, 1MB each (adjust as needed)
@@ -774,12 +775,6 @@ class ModlistInstallCLI:
             if debug_mode:
                 cmd.append('--debug')
                 self.logger.info("Adding --debug flag to jackify-engine")
-
-            # Check GPU setting and add --no-gpu flag if disabled
-            gpu_enabled = config_handler.get('enable_gpu_texture_conversion', True)
-            if not gpu_enabled:
-                cmd.append('--no-gpu')
-                self.logger.info("GPU texture conversion disabled - adding --no-gpu flag to jackify-engine")
 
             # Store original environment values to restore later
             original_env_values = {

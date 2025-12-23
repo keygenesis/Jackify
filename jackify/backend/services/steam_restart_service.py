@@ -402,14 +402,15 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
             if final_check.returncode != 0:
                 logger.info("Steam processes successfully force terminated.")
             else:
-                report("Failed to terminate Steam processes.")
-                return False
+                # Steam might still be running, but proceed anyway - wait phase will verify
+                logger.warning("Steam processes may still be running after termination attempts. Proceeding to start phase...")
+                report("Steam shutdown incomplete, but proceeding...")
         else:
             logger.info("Steam processes successfully terminated.")
     except Exception as e:
-        logger.error(f"Error during Steam shutdown: {e}")
-        report("Failed to shut down Steam.")
-        return False
+        # Don't fail completely on shutdown errors - proceed to start phase
+        logger.warning(f"Error during Steam shutdown: {e}. Proceeding to start phase anyway...")
+        report("Steam shutdown had issues, but proceeding...")
     
     report("Steam closed successfully.")
 
@@ -427,42 +428,56 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
             return False
     else:
         # All other distros: Use start_steam() which now uses -foreground to ensure GUI opens
-        if not start_steam(
+        steam_started = start_steam(
             is_steamdeck_flag=_is_steam_deck,
             is_flatpak_flag=_is_flatpak,
             env_override=start_env,
             strategy=strategy,
-        ):
-            report("Failed to start Steam.")
-            return False
+        )
+        # Even if start_steam() returns False, Steam might still be starting
+        # Give it a chance by proceeding to wait phase
+        if not steam_started:
+            logger.warning("start_steam() returned False, but proceeding to wait phase in case Steam is starting anyway")
+            report("Steam start command issued, waiting for process...")
 
     # Wait for Steam to fully initialize
     # CRITICAL: Use steamwebhelper (actual Steam process), not "steam" (matches steam-powerbuttond, etc.)
     report("Waiting for Steam to fully start")
-    logger.info("Waiting up to 2 minutes for Steam to fully initialize...")
-    max_startup_wait = 120
+    logger.info("Waiting up to 3 minutes (180 seconds) for Steam to fully initialize...")
+    max_startup_wait = 180  # Increased from 120 to 180 seconds (3 minutes) for slower systems
     elapsed_wait = 0
     initial_wait_done = False
+    last_status_log = 0  # Track when we last logged status
     
     while elapsed_wait < max_startup_wait:
         try:
+            # Log status every 30 seconds so user knows we're still waiting
+            if elapsed_wait - last_status_log >= 30:
+                remaining = max_startup_wait - elapsed_wait
+                logger.info(f"Still waiting for Steam... ({elapsed_wait}s elapsed, {remaining}s remaining)")
+                if progress_callback:
+                    progress_callback(f"Waiting for Steam... ({elapsed_wait}s / {max_startup_wait}s)")
+                last_status_log = elapsed_wait
+            
             # Use steamwebhelper for detection (matches shutdown logic)
             result = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=start_env)
             if result.returncode == 0:
                 if not initial_wait_done:
-                    logger.info("Steam process detected. Waiting additional time for full initialization...")
+                    logger.info(f"Steam process detected at {elapsed_wait}s. Waiting additional time for full initialization...")
                     initial_wait_done = True
                 time.sleep(5)
                 elapsed_wait += 5
-                if initial_wait_done and elapsed_wait >= 15:
+                # Require at least 20 seconds of stable detection (increased from 15)
+                if initial_wait_done and elapsed_wait >= 20:
                     final_check = subprocess.run(['pgrep', '-f', 'steamwebhelper'], capture_output=True, timeout=10, env=start_env)
                     if final_check.returncode == 0:
                         report("Steam started successfully.")
-                        logger.info("Steam confirmed running after wait.")
+                        logger.info(f"Steam confirmed running after {elapsed_wait}s wait.")
                         return True
                     else:
-                        logger.warning("Steam process disappeared during final initialization wait.")
-                        break
+                        logger.warning("Steam process disappeared during final initialization wait, continuing to wait...")
+                        # Don't break - continue waiting in case Steam is still starting
+                        initial_wait_done = False  # Reset to allow re-detection
             else:
                 logger.debug(f"Steam process not yet detected. Waiting... ({elapsed_wait + 5}s)")
                 time.sleep(5)
@@ -472,6 +487,7 @@ def robust_steam_restart(progress_callback: Optional[Callable[[str], None]] = No
             time.sleep(5)
             elapsed_wait += 5
     
-    report("Steam did not start within timeout.")
-    logger.error("Steam failed to start/initialize within the allowed time.")
+    # Only reach here if we've waited the full duration
+    report(f"Steam did not start within {max_startup_wait}s timeout.")
+    logger.error(f"Steam failed to start/initialize within the allowed time ({elapsed_wait}s elapsed).")
     return False 

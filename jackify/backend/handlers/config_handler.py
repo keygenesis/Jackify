@@ -389,6 +389,14 @@ class ConfigHandler:
         """
         try:
             from Crypto.Cipher import AES
+            
+            # Check if MODE_GCM is available (pycryptodome has it, old pycrypto doesn't)
+            if not hasattr(AES, 'MODE_GCM'):
+                # Fallback to base64 decode if old pycrypto is installed
+                try:
+                    return base64.b64decode(encrypted_key.encode('utf-8')).decode('utf-8')
+                except:
+                    return None
 
             # Derive 32-byte AES key
             key = base64.urlsafe_b64decode(self._get_encryption_key())
@@ -407,6 +415,12 @@ class ConfigHandler:
 
         except ImportError:
             # Fallback to base64 decode
+            try:
+                return base64.b64decode(encrypted_key.encode('utf-8')).decode('utf-8')
+            except:
+                return None
+        except AttributeError:
+            # Old pycrypto doesn't have MODE_GCM, fallback to base64
             try:
                 return base64.b64decode(encrypted_key.encode('utf-8')).decode('utf-8')
             except:

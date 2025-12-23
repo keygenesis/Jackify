@@ -388,6 +388,15 @@ class ModlistDetailDialog(QDialog):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+        # --- Banner area with full-width text overlay ---
+        # Container so we can place a semi-opaque text panel over the banner image
+        banner_container = QFrame()
+        banner_container.setFrameShape(QFrame.NoFrame)
+        banner_container.setStyleSheet("background: #000; border: none;")
+        banner_layout = QVBoxLayout()
+        banner_layout.setContentsMargins(0, 0, 0, 0)
+        banner_layout.setSpacing(0)
+        banner_container.setLayout(banner_layout)
 
         # Banner image at top with 16:9 aspect ratio (like Wabbajack)
         self.banner_label = QLabel()
@@ -396,40 +405,67 @@ class ModlistDetailDialog(QDialog):
         self.banner_label.setStyleSheet("background: #1a1a1a; border: none;")
         self.banner_label.setAlignment(Qt.AlignCenter)
         self.banner_label.setText("Loading image...")
-        main_layout.addWidget(self.banner_label)
+        banner_layout.addWidget(self.banner_label)
 
-        # Content area with padding
+        # Full-width transparent container with opaque card inside (only as wide as text)
+        overlay_container = QWidget()
+        overlay_container.setStyleSheet("background: transparent;")
+        overlay_layout = QHBoxLayout()
+        overlay_layout.setContentsMargins(24, 0, 24, 24)
+        overlay_layout.setSpacing(0)
+        overlay_container.setLayout(overlay_layout)
+        
+        # Opaque text card - only as wide as content needs (where red lines are)
+        self.banner_text_panel = QFrame()
+        self.banner_text_panel.setFrameShape(QFrame.StyledPanel)
+        # Opaque background, rounded corners, sized to content only
+        self.banner_text_panel.setStyleSheet("""
+            QFrame {
+                background-color: rgba(0, 0, 0, 180);
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 8px;
+            }
+        """)
+        self.banner_text_panel.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
+        banner_text_layout = QVBoxLayout()
+        banner_text_layout.setContentsMargins(20, 12, 20, 14)
+        banner_text_layout.setSpacing(6)
+        self.banner_text_panel.setLayout(banner_text_layout)
+        
+        # Add card to container (left-aligned, rest stays transparent)
+        overlay_layout.addWidget(self.banner_text_panel, alignment=Qt.AlignBottom | Qt.AlignLeft)
+        overlay_layout.addStretch()  # Push card left, rest transparent
+
+        # Title only (badges moved to tags section below)
+        title = QLabel(self.metadata.title)
+        title.setFont(QFont("Sans", 24, QFont.Bold))
+        title.setStyleSheet(f"color: {JACKIFY_COLOR_BLUE};")
+        title.setWordWrap(True)
+        banner_text_layout.addWidget(title)
+
+        # Only sizes in overlay (minimal info on image)
+        if self.metadata.sizes:
+            sizes_text = (
+                f"<span style='color: #aaa;'>Download:</span> {self.metadata.sizes.downloadSizeFormatted} • "
+                f"<span style='color: #aaa;'>Install:</span> {self.metadata.sizes.installSizeFormatted} • "
+                f"<span style='color: #aaa;'>Total:</span> {self.metadata.sizes.totalSizeFormatted}"
+            )
+            sizes_label = QLabel(sizes_text)
+            sizes_label.setStyleSheet("color: #fff; font-size: 13px;")
+            banner_text_layout.addWidget(sizes_label)
+
+        # Add full-width transparent container at bottom of banner
+        banner_layout.addWidget(overlay_container, alignment=Qt.AlignBottom)
+        main_layout.addWidget(banner_container)
+
+        # Content area with padding (tags + description + bottom bar)
         content_widget = QWidget()
         content_layout = QVBoxLayout()
         content_layout.setContentsMargins(24, 20, 24, 20)
         content_layout.setSpacing(16)
         content_widget.setLayout(content_layout)
 
-        # Title row with status badges (UNAVAILABLE, Unofficial - Official and NSFW shown in tags)
-        title_row = QHBoxLayout()
-        title_row.setSpacing(12)
-        
-        title = QLabel(self.metadata.title)
-        title.setFont(QFont("Sans", 24, QFont.Bold))
-        title.setStyleSheet(f"color: {JACKIFY_COLOR_BLUE};")
-        title.setWordWrap(True)
-        title_row.addWidget(title, stretch=1)
-        
-        # Status badges in title row
-        if not self.metadata.is_available():
-            unavailable_badge = QLabel("UNAVAILABLE")
-            unavailable_badge.setStyleSheet("background: #666; color: white; padding: 4px 10px; font-size: 10px; font-weight: bold; border-radius: 4px;")
-            title_row.addWidget(unavailable_badge)
-        
-        # Show "Unofficial" badge if not official (Official is shown in tags)
-        if not self.metadata.official:
-            unofficial_badge = QLabel("Unofficial")
-            unofficial_badge.setStyleSheet("background: #666; color: white; padding: 4px 10px; font-size: 10px; font-weight: bold; border-radius: 4px;")
-            title_row.addWidget(unofficial_badge)
-        
-        content_layout.addLayout(title_row)
-
-        # Metadata line (version, author, game) - inline like Wabbajack
+        # Metadata line (version, author, game) - moved below image
         metadata_line_parts = []
         if self.metadata.version:
             metadata_line_parts.append(f"<span style='color: #aaa;'>version</span> {self.metadata.version}")
@@ -446,13 +482,25 @@ class ModlistDetailDialog(QDialog):
         metadata_line.setWordWrap(True)
         content_layout.addWidget(metadata_line)
 
-        # Tags row (like Wabbajack)
+        # Tags row (includes status badges moved from overlay)
+        tags_layout = QHBoxLayout()
+        tags_layout.setSpacing(6)
+        tags_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Add status badges first (UNAVAILABLE, Unofficial)
+        if not self.metadata.is_available():
+            unavailable_badge = QLabel("UNAVAILABLE")
+            unavailable_badge.setStyleSheet("background: #666; color: white; padding: 6px 12px; font-size: 11px; border-radius: 4px;")
+            tags_layout.addWidget(unavailable_badge)
+        
+        if not self.metadata.official:
+            unofficial_badge = QLabel("Unofficial")
+            unofficial_badge.setStyleSheet("background: #666; color: white; padding: 6px 12px; font-size: 11px; border-radius: 4px;")
+            tags_layout.addWidget(unofficial_badge)
+        
+        # Add regular tags
         tags_to_render = getattr(self.metadata, 'normalized_tags_display', self.metadata.tags or [])
         if tags_to_render:
-            tags_layout = QHBoxLayout()
-            tags_layout.setSpacing(6)
-            tags_layout.setContentsMargins(0, 0, 0, 0)
-            
             for tag in tags_to_render:
                 tag_badge = QLabel(tag)
                 # Match Wabbajack tag styling
@@ -463,20 +511,9 @@ class ModlistDetailDialog(QDialog):
                 else:
                     tag_badge.setStyleSheet("background: #3a3a3a; color: #ccc; padding: 6px 12px; font-size: 11px; border-radius: 4px;")
                 tags_layout.addWidget(tag_badge)
-            
-            tags_layout.addStretch()
-            content_layout.addLayout(tags_layout)
-
-        # Sizes (if available)
-        if self.metadata.sizes:
-            sizes_text = (
-                f"<span style='color: #aaa;'>Download:</span> {self.metadata.sizes.downloadSizeFormatted} • "
-                f"<span style='color: #aaa;'>Install:</span> {self.metadata.sizes.installSizeFormatted} • "
-                f"<span style='color: #aaa;'>Total:</span> {self.metadata.sizes.totalSizeFormatted}"
-            )
-            sizes_label = QLabel(sizes_text)
-            sizes_label.setStyleSheet("color: #fff; font-size: 13px;")
-            content_layout.addWidget(sizes_label)
+        
+        tags_layout.addStretch()
+        content_layout.addLayout(tags_layout)
 
         # Description section
         desc_label = QLabel("<b style='color: #aaa; font-size: 14px;'>Description:</b>")
@@ -486,7 +523,8 @@ class ModlistDetailDialog(QDialog):
         self.desc_text = QTextEdit()
         self.desc_text.setReadOnly(True)
         self.desc_text.setPlainText(self.metadata.description or "No description provided.")
-        self.desc_text.setFixedHeight(300)
+        # Compact description area; scroll when content is long
+        self.desc_text.setFixedHeight(120)
         self.desc_text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.desc_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.desc_text.setLineWrapMode(QTextEdit.WidgetWidth)
@@ -832,8 +870,8 @@ class ModlistGalleryDialog(QDialog):
         main_layout.addWidget(filter_panel)
 
         # Right content area (modlist grid)
-        content_area = self._create_content_area()
-        main_layout.addWidget(content_area, stretch=1)
+        self.content_area = self._create_content_area()
+        main_layout.addWidget(self.content_area, stretch=1)
 
         self.setLayout(main_layout)
 
@@ -934,8 +972,8 @@ class ModlistGalleryDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        # Status label (subtle, top-right)
-        self.status_label = QLabel("Loading modlists...")
+        # Status label (subtle, top-right) - hidden during initial loading (popup shows instead)
+        self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #888; font-size: 10px;")
         self.status_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
         layout.addWidget(self.status_label)
@@ -965,13 +1003,55 @@ class ModlistGalleryDialog(QDialog):
         from PySide6.QtCore import QThread, Signal
         from PySide6.QtGui import QFont
 
-        # Make status label more prominent during loading
-        self.status_label.setText("Loading modlists...")
+        # Hide status label during loading (popup dialog will show instead)
+        self.status_label.setVisible(False)
+        
+        # Show loading overlay directly in content area (simpler than separate dialog)
+        self._loading_overlay = QWidget(self.content_area)
+        self._loading_overlay.setStyleSheet("""
+            QWidget {
+                background-color: rgba(35, 35, 35, 240);
+                border-radius: 8px;
+            }
+        """)
+        overlay_layout = QVBoxLayout()
+        overlay_layout.setContentsMargins(30, 20, 30, 20)
+        overlay_layout.setSpacing(12)
+        
+        self._loading_label = QLabel("Loading modlists")
+        self._loading_label.setAlignment(Qt.AlignCenter)
+        # Set fixed width to prevent text shifting when dots animate
+        # Width accommodates "Loading modlists..." (longest version)
+        self._loading_label.setFixedWidth(220)
         font = QFont()
         font.setPointSize(14)
         font.setBold(True)
-        self.status_label.setFont(font)
-        self.status_label.setStyleSheet(f"color: {JACKIFY_COLOR_BLUE}; font-size: 14px; font-weight: bold;")
+        self._loading_label.setFont(font)
+        self._loading_label.setStyleSheet(f"color: {JACKIFY_COLOR_BLUE}; font-size: 14px; font-weight: bold;")
+        overlay_layout.addWidget(self._loading_label)
+        
+        self._loading_overlay.setLayout(overlay_layout)
+        self._loading_overlay.setFixedSize(300, 120)
+        
+        # Animate dots in loading message
+        self._loading_dot_count = 0
+        self._loading_dot_timer = QTimer()
+        self._loading_dot_timer.timeout.connect(self._animate_loading_dots)
+        self._loading_dot_timer.start(500)  # Update every 500ms
+        
+        # Position overlay in center of content area
+        def position_overlay():
+            if hasattr(self, 'content_area') and self.content_area.isVisible():
+                content_width = self.content_area.width()
+                content_height = self.content_area.height()
+                x = (content_width - 300) // 2
+                y = (content_height - 120) // 2
+                self._loading_overlay.move(x, y)
+                self._loading_overlay.show()
+                self._loading_overlay.raise_()
+        
+        # Delay slightly to ensure content_area is laid out
+        QTimer.singleShot(50, position_overlay)
 
         class ModlistLoaderThread(QThread):
             """Background thread to load modlist metadata"""
@@ -987,9 +1067,10 @@ class ModlistGalleryDialog(QDialog):
                     start_time = time.time()
 
                     # Fetch metadata (CPU-intensive work happens here in background)
+                    # Skip search index initially for faster loading - can be loaded later if user searches
                     metadata_response = self.gallery_service.fetch_modlist_metadata(
                         include_validation=False,
-                        include_search_index=True,
+                        include_search_index=False,  # Skip for faster initial load
                         sort_by="title"
                     )
 
@@ -1010,17 +1091,31 @@ class ModlistGalleryDialog(QDialog):
         self._loader_thread.finished.connect(self._on_modlists_loaded)
         self._loader_thread.start()
 
+    def _animate_loading_dots(self):
+        """Animate dots in loading message"""
+        if hasattr(self, '_loading_label') and self._loading_label:
+            self._loading_dot_count = (self._loading_dot_count + 1) % 4
+            dots = "." * self._loading_dot_count
+            # Pad with spaces to keep text width constant (prevents shifting)
+            padding = " " * (3 - self._loading_dot_count)
+            self._loading_label.setText(f"Loading modlists{dots}{padding}")
+    
     def _on_modlists_loaded(self, metadata_response, error_message):
         """Handle modlist metadata loaded in background thread (runs in GUI thread)"""
         import random
-        from PySide6.QtCore import QTimer
         from PySide6.QtGui import QFont
 
-        # Restore normal status label styling
-        font = QFont()
-        font.setPointSize(10)
-        self.status_label.setFont(font)
-        self.status_label.setStyleSheet("color: #888; font-size: 10px;")
+        # Stop animation timer and close loading overlay
+        if hasattr(self, '_loading_dot_timer') and self._loading_dot_timer:
+            self._loading_dot_timer.stop()
+            self._loading_dot_timer = None
+        
+        if hasattr(self, '_loading_overlay') and self._loading_overlay:
+            self._loading_overlay.hide()
+            self._loading_overlay.deleteLater()
+            self._loading_overlay = None
+        
+        self.status_label.setVisible(True)
 
         if error_message:
             self.status_label.setText(f"Error loading modlists: {error_message}")

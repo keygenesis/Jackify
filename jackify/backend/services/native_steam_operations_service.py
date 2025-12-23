@@ -177,7 +177,7 @@ class NativeSteamOperationsService:
 
         # Also check additional Steam libraries via libraryfolders.vdf
         try:
-            from jackify.shared.paths import PathHandler
+            from jackify.backend.handlers.path_handler import PathHandler
             all_steam_libs = PathHandler.get_all_steam_library_paths()
 
             for lib_path in all_steam_libs:

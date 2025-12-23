@@ -1196,7 +1196,8 @@ class InstallWabbajackHandler:
         """Displays the final success message and next steps."""
         # Basic log file path (assuming standard location)
         # TODO: Get log file path more reliably if needed
-        log_path = Path.home() / "Jackify" / "logs" / "jackify-cli.log"
+        from jackify.shared.paths import get_jackify_logs_dir
+        log_path = get_jackify_logs_dir() / "jackify-cli.log"
 
         print("\n───────────────────────────────────────────────────────────────────")
         print(f"{COLOR_INFO}Wabbajack Installation Completed Successfully!{COLOR_RESET}")

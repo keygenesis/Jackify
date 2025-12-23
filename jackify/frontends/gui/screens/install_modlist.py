@@ -2157,12 +2157,6 @@ class InstallModlistScreen(QWidget):
                         cmd.append('--debug')
                         debug_print("DEBUG: Added --debug flag to jackify-engine command")
 
-                    # Check GPU setting and add --no-gpu flag if disabled
-                    gpu_enabled = config_handler.get('enable_gpu_texture_conversion', True)
-                    if not gpu_enabled:
-                        cmd.append('--no-gpu')
-                        debug_print("DEBUG: Added --no-gpu flag (GPU texture conversion disabled)")
-                    
                     # CRITICAL: Print the FULL command so we can see exactly what's being passed
                     debug_print(f"DEBUG: FULL Engine command: {' '.join(cmd)}")
                     debug_print(f"DEBUG: modlist value being passed: '{self.modlist}'")

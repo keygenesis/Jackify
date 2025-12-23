@@ -288,15 +288,6 @@ class ModlistService:
             # Build command (copied from working code)
             cmd = [engine_path, 'install', '--show-file-progress']
 
-            # Check GPU setting
-            from jackify.backend.handlers.config_handler import ConfigHandler
-            config_handler = ConfigHandler()
-            gpu_enabled = config_handler.get('enable_gpu_texture_conversion', True)
-            logger.info(f"GPU texture conversion setting: {gpu_enabled}")
-            if not gpu_enabled:
-                cmd.append('--no-gpu')
-                logger.info("Added --no-gpu flag to jackify-engine command")
-
             modlist_value = context.get('modlist_value')
             if modlist_value and modlist_value.endswith('.wabbajack') and os.path.isfile(modlist_value):
                 cmd += ['-w', modlist_value]

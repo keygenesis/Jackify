@@ -30,7 +30,8 @@ class AutomatedPrefixService:
     """
     
     def __init__(self, system_info=None):
-        self.scripts_dir = Path.home() / "Jackify/scripts"
+        from jackify.shared.paths import get_jackify_data_dir
+        self.scripts_dir = get_jackify_data_dir() / "scripts"
         self.scripts_dir.mkdir(parents=True, exist_ok=True)
         self.system_info = system_info
         # Use shared timing for consistency across services
@@ -749,7 +750,8 @@ echo Creating Proton prefix...
 timeout /t 3 /nobreak >nul
 echo Prefix creation complete.
 """
-            batch_path = Path.home() / "Jackify/temp_prefix_creation.bat"
+            from jackify.shared.paths import get_jackify_data_dir
+            batch_path = get_jackify_data_dir() / "temp_prefix_creation.bat"
             batch_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(batch_path, 'w') as f:

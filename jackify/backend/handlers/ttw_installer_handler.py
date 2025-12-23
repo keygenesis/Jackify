@@ -23,7 +23,8 @@ from .subprocess_utils import get_clean_subprocess_env
 logger = logging.getLogger(__name__)
 
 # Define default TTW_Linux_Installer paths
-JACKIFY_BASE_DIR = Path.home() / "Jackify"
+from jackify.shared.paths import get_jackify_data_dir
+JACKIFY_BASE_DIR = get_jackify_data_dir()
 DEFAULT_TTW_INSTALLER_DIR = JACKIFY_BASE_DIR / "TTW_Linux_Installer"
 TTW_INSTALLER_EXECUTABLE_NAME = "ttw_linux_gui"  # Same executable, runs in CLI mode with args
 

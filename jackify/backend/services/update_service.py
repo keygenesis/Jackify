@@ -271,9 +271,9 @@ class UpdateService:
             total_size = int(response.headers.get('content-length', 0))
             downloaded_size = 0
             
-            # Create update directory in user's home directory
-            home_dir = Path.home()
-            update_dir = home_dir / "Jackify" / "updates"
+            # Create update directory in user's data directory
+            from jackify.shared.paths import get_jackify_data_dir
+            update_dir = get_jackify_data_dir() / "updates"
             update_dir.mkdir(parents=True, exist_ok=True)
             
             temp_file = update_dir / f"Jackify-{update_info.version}.AppImage"
@@ -345,9 +345,9 @@ class UpdateService:
             Path to helper script, or None if creation failed
         """
         try:
-            # Create update directory in user's home directory
-            home_dir = Path.home()
-            update_dir = home_dir / "Jackify" / "updates"
+            # Create update directory in user's data directory
+            from jackify.shared.paths import get_jackify_data_dir
+            update_dir = get_jackify_data_dir() / "updates"
             update_dir.mkdir(parents=True, exist_ok=True)
             
             helper_script = update_dir / "update_helper.sh"

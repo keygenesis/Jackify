@@ -132,14 +132,31 @@ class ProtontricksDetectionService:
                 logger.error(error_msg)
                 return False, error_msg
             
-            # Install command
-            install_cmd = ["flatpak", "install", "-u", "-y", "--noninteractive", "flathub", "com.github.Matoking.protontricks"]
+            # Install command - use --user flag for user-level installation (works on Steam Deck)
+            # This avoids requiring system-wide installation permissions
+            install_cmd = ["flatpak", "install", "--user", "-y", "--noninteractive", "flathub", "com.github.Matoking.protontricks"]
             
             # Use clean environment
             env = handler._get_clean_subprocess_env()
             
-            # Run installation
-            process = subprocess.run(install_cmd, check=True, text=True, env=env, capture_output=True)
+            # Log the command for debugging
+            logger.debug(f"Running flatpak install command: {' '.join(install_cmd)}")
+            
+            # Run installation with timeout (5 minutes should be plenty)
+            process = subprocess.run(
+                install_cmd, 
+                check=True, 
+                text=True, 
+                env=env, 
+                capture_output=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            # Log stdout/stderr for debugging (even on success, might contain useful info)
+            if process.stdout:
+                logger.debug(f"Flatpak install stdout: {process.stdout}")
+            if process.stderr:
+                logger.debug(f"Flatpak install stderr: {process.stderr}")
             
             # Clear cache to force re-detection
             self._cached_detection_valid = False
@@ -152,13 +169,41 @@ class ProtontricksDetectionService:
             error_msg = "Flatpak command not found. Please install Flatpak first."
             logger.error(error_msg)
             return False, error_msg
-        except subprocess.CalledProcessError as e:
-            error_msg = f"Flatpak installation failed: {e}"
+        except subprocess.TimeoutExpired:
+            error_msg = "Flatpak installation timed out after 5 minutes. Please check your network connection and try again."
             logger.error(error_msg)
+            return False, error_msg
+        except subprocess.CalledProcessError as e:
+            # Include stderr in error message for better debugging
+            stderr_msg = e.stderr.strip() if e.stderr else "No error details available"
+            stdout_msg = e.stdout.strip() if e.stdout else ""
+            
+            # Try to extract meaningful error from stderr
+            if stderr_msg:
+                # Common errors: permission denied, network issues, etc.
+                if "permission" in stderr_msg.lower() or "denied" in stderr_msg.lower():
+                    error_msg = f"Permission denied. Try running: flatpak install --user flathub com.github.Matoking.protontricks\n\nDetails: {stderr_msg}"
+                elif "network" in stderr_msg.lower() or "connection" in stderr_msg.lower():
+                    error_msg = f"Network error during installation. Check your internet connection.\n\nDetails: {stderr_msg}"
+                elif "already installed" in stderr_msg.lower():
+                    # This might actually be success - clear cache and re-detect
+                    logger.info("Protontricks appears to already be installed (according to flatpak output)")
+                    self._cached_detection_valid = False
+                    return True, "Protontricks is already installed."
+                else:
+                    error_msg = f"Flatpak installation failed:\n\n{stderr_msg}"
+                    if stdout_msg:
+                        error_msg += f"\n\nOutput: {stdout_msg}"
+            else:
+                error_msg = f"Flatpak installation failed with return code {e.returncode}."
+                if stdout_msg:
+                    error_msg += f"\n\nOutput: {stdout_msg}"
+            
+            logger.error(f"Flatpak installation error: {error_msg}")
             return False, error_msg
         except Exception as e:
             error_msg = f"Unexpected error during Flatpak installation: {e}"
-            logger.error(error_msg)
+            logger.error(error_msg, exc_info=True)
             return False, error_msg
     
     def get_installation_guidance(self) -> str:
