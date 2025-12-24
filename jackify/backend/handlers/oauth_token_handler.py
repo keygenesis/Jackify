@@ -142,11 +142,6 @@ class OAuthTokenHandler:
         """
         try:
             from Crypto.Cipher import AES
-            
-            # Check if MODE_GCM is available (pycryptodome has it, old pycrypto doesn't)
-            if not hasattr(AES, 'MODE_GCM'):
-                logger.error("pycryptodome required for token decryption (pycrypto doesn't support MODE_GCM)")
-                return None
 
             # Derive 32-byte AES key from encryption_key
             key = base64.urlsafe_b64decode(self._encryption_key)
@@ -167,9 +162,6 @@ class OAuthTokenHandler:
 
         except ImportError:
             logger.error("pycryptodome package not available for token decryption")
-            return None
-        except AttributeError:
-            logger.error("pycryptodome required for token decryption (pycrypto doesn't support MODE_GCM)")
             return None
         except Exception as e:
             logger.error(f"Failed to decrypt data: {e}")

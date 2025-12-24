@@ -1,5 +1,13 @@
 # Jackify Changelog
 
+## v0.2.0.5 - Emergency OAuth Fix
+**Release Date:** 2025-12-24
+
+### Critical Bug Fixes
+- **OAuth Authentication**: Fixed regression in v0.2.0.4 that prevented OAuth token encryption/decryption, breaking Nexus authentication for users
+
+---
+
 ## v0.2.0.4 - Bugfixes & Improvements
 **Release Date:** 2025-12-23
 
