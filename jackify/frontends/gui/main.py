@@ -904,20 +904,22 @@ class SettingsDialog(QDialog):
                     if best_proton:
                         resolved_install_path = str(best_proton['path'])
                         resolved_install_version = best_proton['name']
+                        self.config_handler.set("proton_path", resolved_install_path)
+                        self.config_handler.set("proton_version", resolved_install_version)
                     else:
-                        resolved_install_path = "auto"
-                        resolved_install_version = "auto"
-                except:
-                    resolved_install_path = "auto"
-                    resolved_install_version = "auto"
+                        # No Proton found - don't write anything, let engine auto-detect
+                        logger.warning("Auto Proton selection failed: No Proton versions found")
+                        # Don't modify existing config values
+                except Exception as e:
+                    # Exception during detection - log it and don't write anything
+                    logger.error(f"Auto Proton selection failed with exception: {e}", exc_info=True)
+                    # Don't modify existing config values
             else:
                 # User selected specific Proton version
                 resolved_install_path = selected_install_proton_path
-                # Extract version from dropdown text
                 resolved_install_version = self.install_proton_dropdown.currentText()
-
-            self.config_handler.set("proton_path", resolved_install_path)
-            self.config_handler.set("proton_version", resolved_install_version)
+                self.config_handler.set("proton_path", resolved_install_path)
+                self.config_handler.set("proton_version", resolved_install_version)
 
             # Save Game Proton selection
             selected_game_proton_path = self.game_proton_dropdown.currentData()
@@ -1037,6 +1039,10 @@ class JackifyMainWindow(QMainWindow):
         self._compact_height = 640
         self._details_extra_height = 360
         self._initial_show_adjusted = False
+        
+        # Track open dialogs to prevent duplicates
+        self._settings_dialog = None
+        self._about_dialog = None
         
         # Ensure GNOME/Ubuntu exposes full set of window controls (avoid hidden buttons)
         self._apply_standard_window_flags()
@@ -1606,23 +1612,74 @@ class JackifyMainWindow(QMainWindow):
         event.accept()
 
     def open_settings_dialog(self):
+        """Open settings dialog, preventing duplicate instances"""
         try:
+            # Check if dialog already exists and is visible
+            if self._settings_dialog is not None:
+                try:
+                    if self._settings_dialog.isVisible():
+                        # Dialog is already open - raise it to front
+                        self._settings_dialog.raise_()
+                        self._settings_dialog.activateWindow()
+                        return
+                    else:
+                        # Dialog exists but is closed - clean up reference
+                        self._settings_dialog = None
+                except RuntimeError:
+                    # Dialog was deleted - clean up reference
+                    self._settings_dialog = None
+            
+            # Create new dialog
             dlg = SettingsDialog(self)
+            self._settings_dialog = dlg
+            
+            # Clean up reference when dialog is closed
+            def on_dialog_finished():
+                self._settings_dialog = None
+            
+            dlg.finished.connect(on_dialog_finished)
             dlg.exec()
         except Exception as e:
             print(f"[ERROR] Exception in open_settings_dialog: {e}")
             import traceback
             traceback.print_exc()
+            self._settings_dialog = None
 
     def open_about_dialog(self):
+        """Open about dialog, preventing duplicate instances"""
         try:
             from jackify.frontends.gui.dialogs.about_dialog import AboutDialog
+            
+            # Check if dialog already exists and is visible
+            if self._about_dialog is not None:
+                try:
+                    if self._about_dialog.isVisible():
+                        # Dialog is already open - raise it to front
+                        self._about_dialog.raise_()
+                        self._about_dialog.activateWindow()
+                        return
+                    else:
+                        # Dialog exists but is closed - clean up reference
+                        self._about_dialog = None
+                except RuntimeError:
+                    # Dialog was deleted - clean up reference
+                    self._about_dialog = None
+            
+            # Create new dialog
             dlg = AboutDialog(self.system_info, self)
+            self._about_dialog = dlg
+            
+            # Clean up reference when dialog is closed
+            def on_dialog_finished():
+                self._about_dialog = None
+            
+            dlg.finished.connect(on_dialog_finished)
             dlg.exec()
         except Exception as e:
             print(f"[ERROR] Exception in open_about_dialog: {e}")
             import traceback
             traceback.print_exc()
+            self._about_dialog = None
 
     def _open_url(self, url: str):
         """Open URL with clean environment to avoid AppImage library conflicts."""

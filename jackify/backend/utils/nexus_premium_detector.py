@@ -34,9 +34,6 @@ def is_non_premium_indicator(line: str) -> bool:
         if phrase in normalized:
             return True
 
-    if "nexus" in normalized and "premium" in normalized:
-        return True
-
     # Manual download + Nexus URL implies premium requirement in current workflows.
     if "manual download" in normalized and ("nexusmods.com" in normalized or "nexus mods" in normalized):
         return True

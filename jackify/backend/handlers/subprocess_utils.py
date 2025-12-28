@@ -48,6 +48,9 @@ def get_clean_subprocess_env(extra_env=None):
     
     env = os.environ.copy()
 
+    # Save APPDIR before removing it (we need it to find bundled tools)
+    appdir = env.get('APPDIR')
+
     # Remove AppImage-specific variables that can confuse subprocess calls
     # These variables cause subprocesses to be interpreted as new AppImage launches
     for key in ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD']:
@@ -57,10 +60,10 @@ def get_clean_subprocess_env(extra_env=None):
     for k in list(env):
         if k.startswith('_MEIPASS'):
             del env[k]
-    
+
     # Get current PATH - ensure we preserve system paths
     current_path = env.get('PATH', '')
-    
+
     # Ensure common system directories are in PATH if not already present
     # This is critical for tools like lz4 that might be in /usr/bin, /usr/local/bin, etc.
     system_paths = ['/usr/bin', '/usr/local/bin', '/bin', '/sbin', '/usr/sbin']
@@ -68,10 +71,10 @@ def get_clean_subprocess_env(extra_env=None):
     for sys_path in system_paths:
         if sys_path not in path_parts and os.path.isdir(sys_path):
             path_parts.append(sys_path)
-    
+
     # Add bundled tools directory to PATH if running as AppImage
     # This ensures lz4, unzip, xz, etc. are available to subprocesses
-    appdir = env.get('APPDIR')
+    # Note: appdir was saved before env cleanup above
     tools_dir = None
     
     if appdir:

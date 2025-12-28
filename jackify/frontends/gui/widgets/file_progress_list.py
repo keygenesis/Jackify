@@ -20,6 +20,13 @@ from PySide6.QtGui import QFont
 from jackify.shared.progress_models import FileProgress, OperationType
 from ..shared_theme import JACKIFY_COLOR_BLUE
 
+def _debug_log(message):
+    """Log message only if debug mode is enabled"""
+    from jackify.backend.handlers.config_handler import ConfigHandler
+    config_handler = ConfigHandler()
+    if config_handler.get('debug_mode', False):
+        print(message)
+
 
 class SummaryProgressWidget(QWidget):
     """Widget showing summary progress for phases like Installing."""
@@ -484,7 +491,28 @@ class FileProgressList(QWidget):
                 return
 
             # Widget doesn't exist - create it (only clear when creating new widget)
+            # CRITICAL FIX: Remove all item widgets before clear() to prevent orphaned widgets
+            _debug_log(f"[WIDGET_FIX] About to clear list_widget for summary widget - count={self.list_widget.count()}")
+            for i in range(self.list_widget.count()):
+                item = self.list_widget.item(i)
+                if item:
+                    widget = self.list_widget.itemWidget(item)
+                    if widget:
+                        _debug_log(f"[WIDGET_FIX] Removing widget before clear (summary) - widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                        self.list_widget.removeItemWidget(item)
+                        if widget.isWindow():
+                            print(f"[WIDGET_FIX] ERROR: Widget became top-level window after removeItemWidget() before clear()!")
+                            import traceback
+                            traceback.print_stack()
             self.list_widget.clear()
+            # Check widgets in _file_items dict after clear
+            for key, widget in list(self._file_items.items()):
+                if widget:
+                    _debug_log(f"[WIDGET_FIX] Widget in _file_items after clear - key={key}, widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                    if widget.isWindow():
+                        print(f"[WIDGET_FIX] ERROR: Widget in _file_items is a top-level window after clear()! This is the bug!")
+                        import traceback
+                        traceback.print_stack()
             self._file_items.clear()
 
             # Create new summary widget
@@ -510,7 +538,22 @@ class FileProgressList(QWidget):
                 for i in range(self.list_widget.count()):
                     item = self.list_widget.item(i)
                     if item and item.data(Qt.UserRole) == "__summary__":
+                        # CRITICAL FIX: Call removeItemWidget() before takeItem() to prevent orphaned widgets
+                        widget = self.list_widget.itemWidget(item)
+                        if widget:
+                            _debug_log(f"[WIDGET_FIX] Removing summary widget - widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                            self.list_widget.removeItemWidget(item)
+                            if widget.isWindow():
+                                print(f"[WIDGET_FIX] ERROR: Summary widget became top-level window after removeItemWidget()!")
+                                import traceback
+                                traceback.print_stack()
                         self.list_widget.takeItem(i)
+                        if widget:
+                            _debug_log(f"[WIDGET_FIX] After takeItem (summary) - widget.parent()={widget.parent()}, isWindow()={widget.isWindow()}")
+                            if widget.isWindow():
+                                print(f"[WIDGET_FIX] ERROR: Summary widget is still a top-level window after takeItem()!")
+                                import traceback
+                                traceback.print_stack()
                         break
                 self._summary_widget = None
             else:
@@ -522,7 +565,22 @@ class FileProgressList(QWidget):
             for i in range(self.list_widget.count()):
                 item = self.list_widget.item(i)
                 if item and item.data(Qt.UserRole) == "__transition__":
+                    # CRITICAL FIX: Call removeItemWidget() before takeItem() to prevent orphaned widgets
+                    widget = self.list_widget.itemWidget(item)
+                    if widget:
+                        _debug_log(f"[WIDGET_FIX] Removing transition label - widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                        self.list_widget.removeItemWidget(item)
+                        if widget.isWindow():
+                            print(f"[WIDGET_FIX] ERROR: Transition label became top-level window after removeItemWidget()!")
+                            import traceback
+                            traceback.print_stack()
                     self.list_widget.takeItem(i)
+                    if widget:
+                        _debug_log(f"[WIDGET_FIX] After takeItem (transition) - widget.parent()={widget.parent()}, isWindow()={widget.isWindow()}")
+                        if widget.isWindow():
+                            print(f"[WIDGET_FIX] ERROR: Transition label is still a top-level window after takeItem()!")
+                            import traceback
+                            traceback.print_stack()
                     break
             self._transition_label = None
         
@@ -533,7 +591,28 @@ class FileProgressList(QWidget):
                 self._show_transition_message(current_phase)
             else:
                 # Show empty state but keep header stable
+                # CRITICAL FIX: Remove all item widgets before clear() to prevent orphaned widgets
+                _debug_log(f"[WIDGET_FIX] About to clear list_widget (empty state) - count={self.list_widget.count()}")
+                for i in range(self.list_widget.count()):
+                    item = self.list_widget.item(i)
+                    if item:
+                        widget = self.list_widget.itemWidget(item)
+                        if widget:
+                            _debug_log(f"[WIDGET_FIX] Removing widget before clear (empty) - widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                            self.list_widget.removeItemWidget(item)
+                            if widget.isWindow():
+                                print(f"[WIDGET_FIX] ERROR: Widget became top-level window after removeItemWidget() before clear()!")
+                                import traceback
+                                traceback.print_stack()
                 self.list_widget.clear()
+                # Check widgets in _file_items dict after clear
+                for key, widget in list(self._file_items.items()):
+                    if widget:
+                        _debug_log(f"[WIDGET_FIX] Widget in _file_items after clear (empty) - key={key}, widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                        if widget.isWindow():
+                            print(f"[WIDGET_FIX] ERROR: Widget in _file_items is a top-level window after clear()! This is the bug!")
+                            import traceback
+                            traceback.print_stack()
                 self._file_items.clear()
 
             # Update last phase tracker
@@ -579,7 +658,24 @@ class FileProgressList(QWidget):
                 for i in range(self.list_widget.count()):
                     item = self.list_widget.item(i)
                     if item and item.data(Qt.UserRole) == item_key:
+                        # CRITICAL FIX: Call removeItemWidget() before takeItem() to prevent orphaned widgets
+                        widget = self.list_widget.itemWidget(item)
+                        if widget:
+                            _debug_log(f"[WIDGET_FIX] Removing widget for item_key={item_key} - widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                            self.list_widget.removeItemWidget(item)
+                            # Check if widget became orphaned after removal
+                            if widget.isWindow():
+                                print(f"[WIDGET_FIX] ERROR: Widget became top-level window after removeItemWidget()! widget={widget}")
+                                import traceback
+                                traceback.print_stack()
                         self.list_widget.takeItem(i)
+                        # Final check after takeItem
+                        if widget:
+                            _debug_log(f"[WIDGET_FIX] After takeItem - widget.parent()={widget.parent()}, isWindow()={widget.isWindow()}")
+                            if widget.isWindow():
+                                print(f"[WIDGET_FIX] ERROR: Widget is still a top-level window after takeItem()! This is the bug!")
+                                import traceback
+                                traceback.print_stack()
                         break
                 del self._file_items[item_key]
         
@@ -638,7 +734,28 @@ class FileProgressList(QWidget):
 
     def _show_transition_message(self, new_phase: str):
         """Show a brief 'Preparing...' message during phase transitions."""
+        # CRITICAL FIX: Remove all item widgets before clear() to prevent orphaned widgets
+        _debug_log(f"[WIDGET_FIX] About to clear list_widget (transition) - count={self.list_widget.count()}")
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item:
+                widget = self.list_widget.itemWidget(item)
+                if widget:
+                    _debug_log(f"[WIDGET_FIX] Removing widget before clear (transition) - widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                    self.list_widget.removeItemWidget(item)
+                    if widget.isWindow():
+                        print(f"[WIDGET_FIX] ERROR: Widget became top-level window after removeItemWidget() before clear()!")
+                        import traceback
+                        traceback.print_stack()
         self.list_widget.clear()
+        # Check widgets in _file_items dict after clear
+        for key, widget in list(self._file_items.items()):
+            if widget:
+                _debug_log(f"[WIDGET_FIX] Widget in _file_items after clear (transition) - key={key}, widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                if widget.isWindow():
+                    print(f"[WIDGET_FIX] ERROR: Widget in _file_items is a top-level window after clear()! This is the bug!")
+                    import traceback
+                    traceback.print_stack()
         self._file_items.clear()
 
         # Header removed - tab label provides context
@@ -663,9 +780,42 @@ class FileProgressList(QWidget):
 
     def clear(self):
         """Clear all file items."""
+        # CRITICAL FIX: Remove all item widgets before clear() to prevent orphaned widgets
+        _debug_log(f"[WIDGET_FIX] clear() called - count={self.list_widget.count()}")
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item:
+                widget = self.list_widget.itemWidget(item)
+                if widget:
+                    _debug_log(f"[WIDGET_FIX] Removing widget before clear() - widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                    self.list_widget.removeItemWidget(item)
+                    if widget.isWindow():
+                        print(f"[WIDGET_FIX] ERROR: Widget became top-level window after removeItemWidget() before clear()!")
+                        import traceback
+                        traceback.print_stack()
         self.list_widget.clear()
+        # Check widgets in _file_items dict after clear
+        for key, widget in list(self._file_items.items()):
+            if widget:
+                _debug_log(f"[WIDGET_FIX] Widget in _file_items after clear() - key={key}, widget={widget}, parent={widget.parent()}, isWindow()={widget.isWindow()}")
+                if widget.isWindow():
+                    print(f"[WIDGET_FIX] ERROR: Widget in _file_items is a top-level window after clear()! This is the bug!")
+                    import traceback
+                    traceback.print_stack()
         self._file_items.clear()
+        if self._summary_widget:
+            _debug_log(f"[WIDGET_FIX] Clearing summary_widget - widget={self._summary_widget}, parent={self._summary_widget.parent()}, isWindow()={self._summary_widget.isWindow()}")
+            if self._summary_widget.isWindow():
+                print(f"[WIDGET_FIX] ERROR: Summary widget is a top-level window in clear()!")
+                import traceback
+                traceback.print_stack()
         self._summary_widget = None
+        if self._transition_label:
+            _debug_log(f"[WIDGET_FIX] Clearing transition_label - widget={self._transition_label}, parent={self._transition_label.parent()}, isWindow()={self._transition_label.isWindow()}")
+            if self._transition_label.isWindow():
+                print(f"[WIDGET_FIX] ERROR: Transition label is a top-level window in clear()!")
+                import traceback
+                traceback.print_stack()
         self._transition_label = None
         self._last_phase = None
         # Header removed - tab label provides context

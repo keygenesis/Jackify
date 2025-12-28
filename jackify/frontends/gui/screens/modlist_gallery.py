@@ -833,6 +833,8 @@ class ModlistGalleryDialog(QDialog):
         self._validation_update_timer = None  # Timer for background validation updates
 
         self._setup_ui()
+        # Disable filter controls during initial load to prevent race conditions
+        self._set_filter_controls_enabled(False)
         # Lazy load - fetch modlists when dialog is shown
 
     def _apply_initial_size(self):
@@ -1168,6 +1170,9 @@ class ModlistGalleryDialog(QDialog):
             # Reconnect filter handler
             self.game_combo.currentIndexChanged.connect(self._apply_filters)
 
+            # Enable filter controls now that data is loaded
+            self._set_filter_controls_enabled(True)
+
             # Apply filters (will show all modlists for selected game initially)
             self._apply_filters()
 
@@ -1389,8 +1394,23 @@ class ModlistGalleryDialog(QDialog):
         self._filter_mods_list()  # Refresh mod list based on NSFW state
         self._apply_filters()  # Apply all filters
     
+    def _set_filter_controls_enabled(self, enabled: bool):
+        """Enable or disable all filter controls"""
+        self.search_box.setEnabled(enabled)
+        self.game_combo.setEnabled(enabled)
+        self.show_official_only.setEnabled(enabled)
+        self.show_nsfw.setEnabled(enabled)
+        self.hide_unavailable.setEnabled(enabled)
+        self.tags_list.setEnabled(enabled)
+        self.mod_search.setEnabled(enabled)
+        self.mods_list.setEnabled(enabled)
+    
     def _apply_filters(self):
         """Apply current filters to modlist display"""
+        # CRITICAL: Guard against race condition - don't filter if modlists aren't loaded yet
+        if not self.all_modlists:
+            return
+        
         filtered = self.all_modlists
 
         # Search filter
@@ -1480,15 +1500,25 @@ class ModlistGalleryDialog(QDialog):
 
     def _update_grid(self):
         """Update grid by removing all cards and re-adding only visible ones"""
+        # CRITICAL: Guard against race condition - don't update if cards aren't ready yet
+        if not self.all_cards:
+            return
+        
         # Disable updates during grid update
         self.grid_widget.setUpdatesEnabled(False)
         
         try:
             # Remove all cards from layout
+            # CRITICAL FIX: Properly remove widgets to prevent overlapping and orphaned windows
+            # We need to explicitly remove widgets from the layout before taking items
+            # to ensure they're fully cleaned up, but we don't setParent(None) because
+            # widgets are immediately re-added to the grid (Qt will reparent them).
             while self.grid_layout.count():
                 item = self.grid_layout.takeAt(0)
-                if item.widget():
-                    item.widget().setParent(None)
+                widget = item.widget() if item else None
+                if widget:
+                    # Explicitly remove widget from layout to prevent overlapping
+                    self.grid_layout.removeWidget(widget)
                 del item
 
             # Calculate number of columns based on available width
@@ -1528,6 +1558,16 @@ class ModlistGalleryDialog(QDialog):
                 
                 card = self.all_cards.get(modlist.machineURL)
                 if card:
+                    # Ensure widget is not already in the layout (prevent overlapping)
+                    # If it is, remove it first (shouldn't happen after takeAt, but safety check)
+                    if card.parent() == self.grid_widget:
+                        # Widget is already a child of grid_widget, check if it's in layout
+                        for i in range(self.grid_layout.count()):
+                            item = self.grid_layout.itemAt(i)
+                            if item and item.widget() == card:
+                                # Already in layout, remove it first
+                                self.grid_layout.removeWidget(card)
+                                break
                     self.grid_layout.addWidget(card, row, col)
             
             # Set column stretch - don't stretch card columns, but add a spacer column

@@ -1,5 +1,18 @@
 # Jackify Changelog
 
+## v0.2.0.6 - Premium Detection and Engine Update
+**Release Date:** 2025-12-28
+
+### Engine Updates
+- **jackify-engine 0.4.4**: Latest engine version with improvements
+
+### Critical Bug Fixes
+- **Premium Detection**: Fixed false Premium errors caused by overly-broad detection pattern triggering on jackify-engine 0.4.3's userinfo JSON output
+- **Custom Data Directory**: Fixed AppImage always creating ~/Jackify on startup, even when user configured a custom jackify_data_dir
+- **Proton Auto-Selection**: Fixed auto-selection writing invalid "auto" string to config on detection failure
+
+---
+
 ## v0.2.0.5 - Emergency OAuth Fix
 **Release Date:** 2025-12-24
 
