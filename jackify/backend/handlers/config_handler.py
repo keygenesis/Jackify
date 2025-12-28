@@ -157,7 +157,8 @@ class ConfigHandler:
         # Migration: v0.0.x -> v0.2.0
         # Encryption changed from cryptography (Fernet) to pycryptodome (AES-GCM)
         # Old encrypted API keys cannot be decrypted, must be re-entered
-        if current_version < "0.2.0":
+        from packaging import version
+        if version.parse(current_version) < version.parse("0.2.0"):
             # Clear old encrypted credentials
             if self.settings.get("nexus_api_key"):
                 logger.warning("Clearing saved API key due to encryption format change")

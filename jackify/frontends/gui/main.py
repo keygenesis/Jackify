@@ -1562,7 +1562,7 @@ class JackifyMainWindow(QMainWindow):
                 
                 # Show update dialog after a short delay to ensure GUI is fully loaded
                 def show_update_dialog():
-                    from ..dialogs.update_dialog import UpdateDialog
+                    from .dialogs.update_dialog import UpdateDialog
                     dialog = UpdateDialog(update_info, self.update_service, self)
                     dialog.exec()
                 

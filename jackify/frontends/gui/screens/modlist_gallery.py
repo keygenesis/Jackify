@@ -1509,17 +1509,18 @@ class ModlistGalleryDialog(QDialog):
         
         try:
             # Remove all cards from layout
-            # CRITICAL FIX: Properly remove widgets to prevent overlapping and orphaned windows
-            # We need to explicitly remove widgets from the layout before taking items
-            # to ensure they're fully cleaned up, but we don't setParent(None) because
-            # widgets are immediately re-added to the grid (Qt will reparent them).
-            while self.grid_layout.count():
-                item = self.grid_layout.takeAt(0)
+            # CRITICAL FIX: Properly remove all widgets to prevent overlapping
+            # Iterate backwards to avoid index shifting issues
+            for i in range(self.grid_layout.count() - 1, -1, -1):
+                item = self.grid_layout.takeAt(i)
                 widget = item.widget() if item else None
                 if widget:
-                    # Explicitly remove widget from layout to prevent overlapping
-                    self.grid_layout.removeWidget(widget)
+                    # Hide widget during removal to prevent visual artifacts
+                    widget.hide()
                 del item
+            
+            # Force layout update to ensure all widgets are removed
+            self.grid_layout.update()
 
             # Calculate number of columns based on available width
             # Get the scroll area width (accounting for filter panel ~280px + margins)
@@ -1558,16 +1559,20 @@ class ModlistGalleryDialog(QDialog):
                 
                 card = self.all_cards.get(modlist.machineURL)
                 if card:
-                    # Ensure widget is not already in the layout (prevent overlapping)
-                    # If it is, remove it first (shouldn't happen after takeAt, but safety check)
-                    if card.parent() == self.grid_widget:
-                        # Widget is already a child of grid_widget, check if it's in layout
-                        for i in range(self.grid_layout.count()):
-                            item = self.grid_layout.itemAt(i)
-                            if item and item.widget() == card:
-                                # Already in layout, remove it first
-                                self.grid_layout.removeWidget(card)
-                                break
+                    # Safety check: ensure widget is not already in the layout
+                    # (shouldn't happen after proper removal above, but defensive programming)
+                    already_in_layout = False
+                    for i in range(self.grid_layout.count()):
+                        item = self.grid_layout.itemAt(i)
+                        if item and item.widget() == card:
+                            # Widget is already in layout - this shouldn't happen, but handle it
+                            already_in_layout = True
+                            self.grid_layout.removeWidget(card)
+                            break
+                    
+                    # Ensure widget is visible and add to grid
+                    if not already_in_layout or card.isHidden():
+                        card.show()
                     self.grid_layout.addWidget(card, row, col)
             
             # Set column stretch - don't stretch card columns, but add a spacer column

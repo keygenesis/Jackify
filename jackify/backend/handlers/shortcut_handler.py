@@ -205,8 +205,8 @@ class ShortcutHandler:
                     time.sleep(1)  # Give some time for the install to complete
                 
                 # Now import it
-                import steam_vdf
-                
+                import vdf as steam_vdf
+
                 with open(shortcuts_file, 'rb') as f:
                     shortcuts_data = steam_vdf.load(f)
                 

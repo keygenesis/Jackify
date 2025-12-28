@@ -1,15 +1,30 @@
 # Jackify Changelog
 
+## v0.2.0.7 - Critical Auth Fix
+**Release Date:** 2025-12-28
+
+### Critical Bug Fixes
+- **OAuth Token Loss**: Fixed version comparison bug that was deleting OAuth tokens every time settings were saved (affects users on v0.2.0.4+)
+- Fixed internal import paths for improved stability
+
+---
+
 ## v0.2.0.6 - Premium Detection and Engine Update
 **Release Date:** 2025-12-28
+
+**IMPORTANT:** If you are on v0.2.0.5, automatic updates will not work. You must manually download and install v0.2.0.6.
 
 ### Engine Updates
 - **jackify-engine 0.4.4**: Latest engine version with improvements
 
 ### Critical Bug Fixes
+- **Auto-Update System**: Fixed broken update dialog import that prevented automatic updates
 - **Premium Detection**: Fixed false Premium errors caused by overly-broad detection pattern triggering on jackify-engine 0.4.3's userinfo JSON output
 - **Custom Data Directory**: Fixed AppImage always creating ~/Jackify on startup, even when user configured a custom jackify_data_dir
 - **Proton Auto-Selection**: Fixed auto-selection writing invalid "auto" string to config on detection failure
+
+### Quality Improvements
+- Added pre-build import validator to prevent broken imports from reaching production
 
 ---
 

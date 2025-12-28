@@ -4358,7 +4358,7 @@ class InstallModlistScreen(QWidget):
 
     def _show_somnium_post_install_guidance(self):
         """Show guidance popup for Somnium post-installation steps"""
-        from ..widgets.message_service import MessageService
+        from ..services.message_service import MessageService
         
         guidance_text = f"""<b>Somnium Post-Installation Required</b><br><br>
 Due to Somnium's non-standard folder structure, you need to manually update the binary paths in ModOrganizer:<br><br>
