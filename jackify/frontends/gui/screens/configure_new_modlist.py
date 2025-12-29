@@ -98,6 +98,7 @@ class SelectionDialog(QDialog):
 
 class ConfigureNewModlistScreen(QWidget):
     steam_restart_finished = Signal(bool, str)
+    resize_request = Signal(str)
     def __init__(self, stacked_widget=None, main_menu_index=0):
         super().__init__()
         debug_print("DEBUG: ConfigureNewModlistScreen __init__ called")
@@ -300,27 +301,49 @@ class ConfigureNewModlistScreen(QWidget):
         if self.debug:
             user_config_widget.setStyleSheet("border: 2px solid orange;")
             user_config_widget.setToolTip("USER_CONFIG_WIDGET")
-        # Right: Activity window (FileProgressList widget)
-        # Fixed size policy to prevent shrinking when window expands
+        # Right: Tabbed interface with Activity and Process Monitor
+        # Both tabs are always available, user can switch between them
+        self.process_monitor = QTextEdit()
+        self.process_monitor.setReadOnly(True)
+        self.process_monitor.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.process_monitor.setMinimumSize(QSize(300, 20))
+        self.process_monitor.setStyleSheet(f"background: #222; color: {JACKIFY_COLOR_BLUE}; font-family: monospace; font-size: 11px; border: 1px solid #444;")
+        self.process_monitor_heading = QLabel("<b>[Process Monitor]</b>")
+        self.process_monitor_heading.setStyleSheet(f"color: {JACKIFY_COLOR_BLUE}; font-size: 13px; margin-bottom: 2px;")
+        self.process_monitor_heading.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        process_vbox = QVBoxLayout()
+        process_vbox.setContentsMargins(0, 0, 0, 0)
+        process_vbox.setSpacing(2)
+        process_vbox.addWidget(self.process_monitor_heading)
+        process_vbox.addWidget(self.process_monitor)
+        process_monitor_widget = QWidget()
+        process_monitor_widget.setLayout(process_vbox)
+        process_monitor_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        if self.debug:
+            process_monitor_widget.setStyleSheet("border: 2px solid purple;")
+            process_monitor_widget.setToolTip("PROCESS_MONITOR")
+        self.process_monitor_widget = process_monitor_widget
+
+        # Set up File Progress List (Activity tab)
         self.file_progress_list.setMinimumSize(QSize(300, 20))
         self.file_progress_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        activity_widget = QWidget()
-        activity_layout = QVBoxLayout()
-        activity_layout.setContentsMargins(0, 0, 0, 0)
-        activity_layout.setSpacing(0)
-        activity_layout.addWidget(self.file_progress_list)
-        activity_widget.setLayout(activity_layout)
+        # Create tab widget to hold both Activity and Process Monitor
+        self.activity_tabs = QTabWidget()
+        self.activity_tabs.setStyleSheet("QTabWidget::pane { background: #222; border: 1px solid #444; } QTabBar::tab { background: #222; color: #ccc; padding: 6px 16px; } QTabBar::tab:selected { background: #333; color: #3fd0ea; } QTabWidget { margin: 0px; padding: 0px; } QTabBar { margin: 0px; padding: 0px; }")
+        self.activity_tabs.setContentsMargins(0, 0, 0, 0)
+        self.activity_tabs.setDocumentMode(False)
+        self.activity_tabs.setTabPosition(QTabWidget.North)
         if self.debug:
-            activity_widget.setStyleSheet("border: 2px solid purple;")
-            activity_widget.setToolTip("ACTIVITY_WINDOW")
-        upper_hbox.addWidget(user_config_widget, stretch=11)
-        upper_hbox.addWidget(activity_widget, stretch=9)
+            self.activity_tabs.setStyleSheet("border: 2px solid cyan;")
+            self.activity_tabs.setToolTip("ACTIVITY_TABS")
 
-        # Keep legacy process monitor hidden (for compatibility with existing code)
-        self.process_monitor = QTextEdit()
-        self.process_monitor.setReadOnly(True)
-        self.process_monitor.setVisible(False)  # Hidden in compact mode
+        # Add both widgets as tabs
+        self.activity_tabs.addTab(self.file_progress_list, "Activity")
+        self.activity_tabs.addTab(process_monitor_widget, "Process Monitor")
+
+        upper_hbox.addWidget(user_config_widget, stretch=11)
+        upper_hbox.addWidget(self.activity_tabs, stretch=9)
         upper_hbox.setAlignment(Qt.AlignTop)
         upper_section_widget = QWidget()
         upper_section_widget.setLayout(upper_hbox)
@@ -570,18 +593,54 @@ class ConfigureNewModlistScreen(QWidget):
                 except Exception:
                     pass
 
+    def _handle_progress_update(self, text):
+        """Handle progress updates - update console, activity window, and progress indicator"""
+        # Always append to console
+        self._safe_append_text(text)
+
+        # Parse the message to update UI widgets
+        message_lower = text.lower()
+
+        # Update progress indicator based on key status messages
+        if "creating steam shortcut" in message_lower:
+            self.progress_indicator.set_status("Creating Steam shortcut...", 10)
+        elif "restarting steam" in message_lower or "restart steam" in message_lower:
+            self.progress_indicator.set_status("Restarting Steam...", 20)
+        elif "steam restart" in message_lower and "success" in message_lower:
+            self.progress_indicator.set_status("Steam restarted successfully", 30)
+        elif "creating proton prefix" in message_lower or "prefix creation" in message_lower:
+            self.progress_indicator.set_status("Creating Proton prefix...", 50)
+        elif "prefix created" in message_lower or "prefix creation" in message_lower and "success" in message_lower:
+            self.progress_indicator.set_status("Proton prefix created", 70)
+        elif "verifying" in message_lower:
+            self.progress_indicator.set_status("Verifying setup...", 80)
+        elif "steam integration complete" in message_lower or "configuration complete" in message_lower:
+            self.progress_indicator.set_status("Configuration complete", 95)
+        elif "complete" in message_lower and not "prefix" in message_lower:
+            self.progress_indicator.set_status("Finishing up...", 90)
+
+        # Update activity window with generic configuration status
+        # Only update if message contains meaningful progress (not blank lines or separators)
+        if text.strip() and not text.strip().startswith('='):
+            # Show generic "Configuring modlist..." in activity window
+            self.file_progress_list.update_files(
+                [],
+                current_phase="Configuring",
+                summary_info={"current": 1, "total": 1, "label": "Setting up modlist"}
+            )
+
     def _safe_append_text(self, text):
         """Append text with professional auto-scroll behavior"""
         # Write all messages to log file
         self._write_to_log_file(text)
-        
+
         scrollbar = self.console.verticalScrollBar()
         # Check if user was at bottom BEFORE adding text
         was_at_bottom = (scrollbar.value() >= scrollbar.maximum() - 1)  # Allow 1px tolerance
-        
+
         # Add the text
         self.console.append(text)
-        
+
         # Auto-scroll if user was at bottom and hasn't manually scrolled
         # Re-check bottom state after text addition for better reliability
         if (was_at_bottom and not self._user_manually_scrolled) or \
@@ -634,6 +693,11 @@ class ConfigureNewModlistScreen(QWidget):
         # Stop CPU tracking if active
         if hasattr(self, 'file_progress_list'):
             self.file_progress_list.stop_cpu_tracking()
+
+        # Clean up automated prefix thread if running
+        if hasattr(self, 'automated_prefix_thread') and self.automated_prefix_thread.isRunning():
+            self.automated_prefix_thread.terminate()
+            self.automated_prefix_thread.wait(1000)
 
         # Clean up configuration thread if running
         if hasattr(self, 'config_thread') and self.config_thread.isRunning():
@@ -929,7 +993,7 @@ class ConfigureNewModlistScreen(QWidget):
         
         # Create and start the thread
         self.automated_prefix_thread = AutomatedPrefixThread(modlist_name, install_dir, mo2_exe_path, _is_steamdeck)
-        self.automated_prefix_thread.progress_update.connect(self._safe_append_text)
+        self.automated_prefix_thread.progress_update.connect(self._handle_progress_update)
         self.automated_prefix_thread.workflow_complete.connect(self._on_automated_prefix_complete)
         self.automated_prefix_thread.error_occurred.connect(self._on_automated_prefix_error)
         self.automated_prefix_thread.start()
@@ -1323,7 +1387,7 @@ class ConfigureNewModlistScreen(QWidget):
             
             # Start configuration thread
             self.config_thread = ConfigThread(updated_context)
-            self.config_thread.progress_update.connect(self._safe_append_text)
+            self.config_thread.progress_update.connect(self._handle_progress_update)
             self.config_thread.configuration_complete.connect(self.on_configuration_complete)
             self.config_thread.error_occurred.connect(self.on_configuration_error)
             self.config_thread.start()
@@ -1424,7 +1488,7 @@ class ConfigureNewModlistScreen(QWidget):
             
             # Create and start the configuration thread
             self.config_thread = ConfigThread(updated_context)
-            self.config_thread.progress_update.connect(self._safe_append_text)
+            self.config_thread.progress_update.connect(self._handle_progress_update)
             self.config_thread.configuration_complete.connect(self.on_configuration_complete)
             self.config_thread.error_occurred.connect(self.on_configuration_error)
             self.config_thread.start()

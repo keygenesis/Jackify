@@ -1337,6 +1337,15 @@ class JackifyMainWindow(QMainWindow):
             self.install_modlist_screen.resize_request.connect(self._on_child_resize_request)
         except Exception:
             pass
+        # Let Configure screens request window resize for expand/collapse
+        try:
+            self.configure_new_modlist_screen.resize_request.connect(self._on_child_resize_request)
+        except Exception:
+            pass
+        try:
+            self.configure_existing_modlist_screen.resize_request.connect(self._on_child_resize_request)
+        except Exception:
+            pass
         
         # Add screens to stacked widget
         self.stacked_widget.addWidget(self.main_menu)           # Index 0: Main Menu

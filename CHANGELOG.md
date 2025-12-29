@@ -1,5 +1,20 @@
 # Jackify Changelog
 
+## v0.2.0.8 - Bug Fixes and Improvements
+**Release Date:** 2025-12-29
+
+### Bug Fixes
+- Fixed Configure New/Existing/TTW screens missing Activity tab and progress updates
+- Fixed cancel/back buttons crashing in Configure workflows
+
+### Improvements
+- Install directory now auto-appends modlist name when selected from gallery
+
+### Known Issues
+- Mod filter temporarily disabled in gallery due to technical issue (tag and game filters still work)
+
+---
+
 ## v0.2.0.7 - Critical Auth Fix
 **Release Date:** 2025-12-28
 

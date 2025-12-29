@@ -1517,6 +1517,16 @@ class InstallModlistScreen(QWidget):
                     'force_down': metadata.forceDown
                 }
                 self.modlist_name_edit.setText(metadata.title)
+
+                # Auto-append modlist name to install directory
+                base_install_dir = self.config_handler.get_modlist_install_base_dir()
+                if base_install_dir:
+                    # Sanitize modlist title for filesystem use
+                    import re
+                    safe_title = re.sub(r'[<>:"/\\|?*]', '', metadata.title)
+                    safe_title = safe_title.strip()
+                    modlist_install_path = os.path.join(base_install_dir, safe_title)
+                    self.install_dir_edit.setText(modlist_install_path)
         finally:
             if cursor_overridden:
                 QApplication.restoreOverrideCursor()
@@ -3953,11 +3963,11 @@ class InstallModlistScreen(QWidget):
                 self.retry_automated_workflow_with_new_name(new_name)
             elif new_name == modlist_name:
                 # Same name - show warning
-                from jackify.backend.services.message_service import MessageService
+                from jackify.frontends.gui.services.message_service import MessageService
                 MessageService.warning(self, "Same Name", "Please enter a different name to resolve the conflict.")
             else:
                 # Empty name
-                from jackify.backend.services.message_service import MessageService
+                from jackify.frontends.gui.services.message_service import MessageService
                 MessageService.warning(self, "Invalid Name", "Please enter a valid shortcut name.")
         
         def on_cancel():

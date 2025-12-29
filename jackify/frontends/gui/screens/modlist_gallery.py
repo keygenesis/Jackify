@@ -933,27 +933,28 @@ class ModlistGalleryDialog(QDialog):
         # Add spacing between Tags and Mods sections
         layout.addSpacing(8)
 
-        # Mod filter
-        mods_label = QLabel("Mods:")
-        layout.addWidget(mods_label)
-        
-        self.mod_search = QLineEdit()
-        self.mod_search.setPlaceholderText("Search mods...")
-        self.mod_search.setStyleSheet("QLineEdit { background: #2a2a2a; color: #fff; border: 1px solid #555; padding: 4px; }")
-        self.mod_search.textChanged.connect(self._filter_mods_list)
-        # Prevent Enter from triggering default button (which would close dialog)
-        self.mod_search.returnPressed.connect(lambda: self.mod_search.clearFocus())
-        layout.addWidget(self.mod_search)
-        
-        self.mods_list = QListWidget()
-        self.mods_list.setSelectionMode(QListWidget.MultiSelection)
-        self.mods_list.setMaximumHeight(150)
-        self.mods_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # Remove horizontal scrollbar
-        self.mods_list.setStyleSheet("QListWidget { background: #2a2a2a; color: #fff; border: 1px solid #555; }")
-        self.mods_list.itemSelectionChanged.connect(self._apply_filters)
-        layout.addWidget(self.mods_list)
-        
-        self.all_mods_list = []  # Store all mods for filtering
+        # Mod filter - TEMPORARILY DISABLED (not working correctly in v0.2.0.8)
+        # TODO: Re-enable once mod search index issue is resolved
+        # mods_label = QLabel("Mods:")
+        # layout.addWidget(mods_label)
+        #
+        # self.mod_search = QLineEdit()
+        # self.mod_search.setPlaceholderText("Search mods...")
+        # self.mod_search.setStyleSheet("QLineEdit { background: #2a2a2a; color: #fff; border: 1px solid #555; padding: 4px; }")
+        # self.mod_search.textChanged.connect(self._filter_mods_list)
+        # # Prevent Enter from triggering default button (which would close dialog)
+        # self.mod_search.returnPressed.connect(lambda: self.mod_search.clearFocus())
+        # layout.addWidget(self.mod_search)
+        #
+        # self.mods_list = QListWidget()
+        # self.mods_list.setSelectionMode(QListWidget.MultiSelection)
+        # self.mods_list.setMaximumHeight(150)
+        # self.mods_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # Remove horizontal scrollbar
+        # self.mods_list.setStyleSheet("QListWidget { background: #2a2a2a; color: #fff; border: 1px solid #555; }")
+        # self.mods_list.itemSelectionChanged.connect(self._apply_filters)
+        # layout.addWidget(self.mods_list)
+        #
+        # self.all_mods_list = []  # Store all mods for filtering
 
         layout.addStretch()
 
@@ -1156,9 +1157,9 @@ class ModlistGalleryDialog(QDialog):
                 if index >= 0:
                     self.game_combo.setCurrentIndex(index)
 
-            # Populate tag and mod filters
+            # Populate tag filter (mod filter temporarily disabled)
             self._populate_tag_filter()
-            self._populate_mod_filter()
+            # self._populate_mod_filter()  # TEMPORARILY DISABLED
 
             # Create cards immediately (will show placeholders for images not in cache)
             self._create_all_cards()
@@ -1228,9 +1229,9 @@ class ModlistGalleryDialog(QDialog):
                     if index >= 0:
                         self.game_combo.setCurrentIndex(index)
 
-                # Populate tag and mod filters
+                # Populate tag filter (mod filter temporarily disabled)
                 self._populate_tag_filter()
-                self._populate_mod_filter()
+                # self._populate_mod_filter()  # TEMPORARILY DISABLED
 
                 # Create cards immediately (will show placeholders for images not in cache)
                 self._create_all_cards()
@@ -1340,58 +1341,64 @@ class ModlistGalleryDialog(QDialog):
     
     def _populate_mod_filter(self):
         """Populate mod filter with all available mods from search index"""
-        all_mods = set()
-        # Track which mods come from NSFW modlists only
-        mods_from_nsfw_only = set()
-        mods_from_sfw = set()
-        modlists_with_mods = 0
-        
-        for modlist in self.all_modlists:
-            if hasattr(modlist, 'mods') and modlist.mods:
-                modlists_with_mods += 1
-                for mod in modlist.mods:
-                    all_mods.add(mod)
-                    if modlist.nsfw:
-                        mods_from_nsfw_only.add(mod)
-                    else:
-                        mods_from_sfw.add(mod)
-        
-        # Mods that are ONLY in NSFW modlists (not in any SFW modlists)
-        self.nsfw_only_mods = mods_from_nsfw_only - mods_from_sfw
-        
-        self.all_mods_list = sorted(all_mods)
-        
-        self._filter_mods_list("")  # Populate with all mods initially
+        # TEMPORARILY DISABLED - mod filter feature removed in v0.2.0.8
+        return
+
+        # all_mods = set()
+        # # Track which mods come from NSFW modlists only
+        # mods_from_nsfw_only = set()
+        # mods_from_sfw = set()
+        # modlists_with_mods = 0
+        #
+        # for modlist in self.all_modlists:
+        #     if hasattr(modlist, 'mods') and modlist.mods:
+        #         modlists_with_mods += 1
+        #         for mod in modlist.mods:
+        #             all_mods.add(mod)
+        #             if modlist.nsfw:
+        #                 mods_from_nsfw_only.add(mod)
+        #             else:
+        #                 mods_from_sfw.add(mod)
+        #
+        # # Mods that are ONLY in NSFW modlists (not in any SFW modlists)
+        # self.nsfw_only_mods = mods_from_nsfw_only - mods_from_sfw
+        #
+        # self.all_mods_list = sorted(all_mods)
+        #
+        # self._filter_mods_list("")  # Populate with all mods initially
     
     def _filter_mods_list(self, search_text: str = ""):
         """Filter the mods list based on search text and NSFW checkbox"""
+        # TEMPORARILY DISABLED - mod filter feature removed in v0.2.0.8
+        return
+
         # Get search text from the widget if not provided
-        if not search_text and hasattr(self, 'mod_search'):
-            search_text = self.mod_search.text()
-        
-        self.mods_list.clear()
-        search_lower = search_text.lower().strip()
-        
-        # Start with all mods or filtered by search
-        if search_lower:
-            filtered_mods = [m for m in self.all_mods_list if search_lower in m.lower()]
-        else:
-            filtered_mods = self.all_mods_list
-        
-        # Filter out NSFW-only mods if NSFW checkbox is not checked
-        if not self.show_nsfw.isChecked():
-            filtered_mods = [m for m in filtered_mods if m not in getattr(self, 'nsfw_only_mods', set())]
-        
-        # Limit to first 500 results for performance
-        for mod in filtered_mods[:500]:
-            self.mods_list.addItem(mod)
-        
-        if len(filtered_mods) > 500:
-            self.mods_list.addItem(f"... and {len(filtered_mods) - 500} more (refine search)")
+        # if not search_text and hasattr(self, 'mod_search'):
+        #     search_text = self.mod_search.text()
+        #
+        # self.mods_list.clear()
+        # search_lower = search_text.lower().strip()
+        #
+        # # Start with all mods or filtered by search
+        # if search_lower:
+        #     filtered_mods = [m for m in self.all_mods_list if search_lower in m.lower()]
+        # else:
+        #     filtered_mods = self.all_mods_list
+        #
+        # # Filter out NSFW-only mods if NSFW checkbox is not checked
+        # if not self.show_nsfw.isChecked():
+        #     filtered_mods = [m for m in filtered_mods if m not in getattr(self, 'nsfw_only_mods', set())]
+        #
+        # # Limit to first 500 results for performance
+        # for mod in filtered_mods[:500]:
+        #     self.mods_list.addItem(mod)
+        #
+        # if len(filtered_mods) > 500:
+        #     self.mods_list.addItem(f"... and {len(filtered_mods) - 500} more (refine search)")
     
     def _on_nsfw_toggled(self, checked: bool):
         """Handle NSFW checkbox toggle - refresh mod list and apply filters"""
-        self._filter_mods_list()  # Refresh mod list based on NSFW state
+        # self._filter_mods_list()  # TEMPORARILY DISABLED - Refresh mod list based on NSFW state
         self._apply_filters()  # Apply all filters
     
     def _set_filter_controls_enabled(self, enabled: bool):
@@ -1402,8 +1409,8 @@ class ModlistGalleryDialog(QDialog):
         self.show_nsfw.setEnabled(enabled)
         self.hide_unavailable.setEnabled(enabled)
         self.tags_list.setEnabled(enabled)
-        self.mod_search.setEnabled(enabled)
-        self.mods_list.setEnabled(enabled)
+        # self.mod_search.setEnabled(enabled)  # TEMPORARILY DISABLED
+        # self.mods_list.setEnabled(enabled)  # TEMPORARILY DISABLED
     
     def _apply_filters(self):
         """Apply current filters to modlist display"""
@@ -1459,10 +1466,10 @@ class ModlistGalleryDialog(QDialog):
                     )
                 ]
 
-        # Mod filter - modlist must contain ALL selected mods
-        selected_mods = [item.text() for item in self.mods_list.selectedItems()]
-        if selected_mods:
-            filtered = [m for m in filtered if m.mods and all(mod in m.mods for mod in selected_mods)]
+        # Mod filter - TEMPORARILY DISABLED (not working correctly in v0.2.0.8)
+        # selected_mods = [item.text() for item in self.mods_list.selectedItems()]
+        # if selected_mods:
+        #     filtered = [m for m in filtered if m.mods and all(mod in m.mods for mod in selected_mods)]
 
         self.filtered_modlists = filtered
         self._update_grid()

@@ -306,29 +306,49 @@ class InstallTTWScreen(QWidget):
             user_config_widget.setStyleSheet("border: 2px solid orange;")
             user_config_widget.setToolTip("USER_CONFIG_WIDGET")
 
-        # Right: Activity window (FileProgressList widget)
-        # Fixed size policy to prevent shrinking when window expands
+        # Right: Tabbed interface with Activity and Process Monitor
+        # Both tabs are always available, user can switch between them
         self.file_progress_list = FileProgressList()
         self.file_progress_list.setMinimumSize(QSize(300, 20))
         self.file_progress_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        activity_widget = QWidget()
-        activity_layout = QVBoxLayout()
-        activity_layout.setContentsMargins(0, 0, 0, 0)
-        activity_layout.setSpacing(0)
-        activity_layout.addWidget(self.file_progress_list)
-        activity_widget.setLayout(activity_layout)
-        if self.debug:
-            activity_widget.setStyleSheet("border: 2px solid purple;")
-            activity_widget.setToolTip("ACTIVITY_WINDOW")
-
-        upper_hbox.addWidget(user_config_widget, stretch=11)
-        upper_hbox.addWidget(activity_widget, stretch=9)
-
-        # Keep legacy process monitor hidden (for compatibility with existing code)
         self.process_monitor = QTextEdit()
         self.process_monitor.setReadOnly(True)
-        self.process_monitor.setVisible(False)
+        self.process_monitor.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.process_monitor.setMinimumSize(QSize(300, 20))
+        self.process_monitor.setStyleSheet(f"background: #222; color: {JACKIFY_COLOR_BLUE}; font-family: monospace; font-size: 11px; border: 1px solid #444;")
+        self.process_monitor_heading = QLabel("<b>[Process Monitor]</b>")
+        self.process_monitor_heading.setStyleSheet(f"color: {JACKIFY_COLOR_BLUE}; font-size: 13px; margin-bottom: 2px;")
+        self.process_monitor_heading.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        process_vbox = QVBoxLayout()
+        process_vbox.setContentsMargins(0, 0, 0, 0)
+        process_vbox.setSpacing(2)
+        process_vbox.addWidget(self.process_monitor_heading)
+        process_vbox.addWidget(self.process_monitor)
+        process_monitor_widget = QWidget()
+        process_monitor_widget.setLayout(process_vbox)
+        process_monitor_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        if self.debug:
+            process_monitor_widget.setStyleSheet("border: 2px solid purple;")
+            process_monitor_widget.setToolTip("PROCESS_MONITOR")
+        self.process_monitor_widget = process_monitor_widget
+
+        # Create tab widget to hold both Activity and Process Monitor
+        self.activity_tabs = QTabWidget()
+        self.activity_tabs.setStyleSheet("QTabWidget::pane { background: #222; border: 1px solid #444; } QTabBar::tab { background: #222; color: #ccc; padding: 6px 16px; } QTabBar::tab:selected { background: #333; color: #3fd0ea; } QTabWidget { margin: 0px; padding: 0px; } QTabBar { margin: 0px; padding: 0px; }")
+        self.activity_tabs.setContentsMargins(0, 0, 0, 0)
+        self.activity_tabs.setDocumentMode(False)
+        self.activity_tabs.setTabPosition(QTabWidget.North)
+        if self.debug:
+            self.activity_tabs.setStyleSheet("border: 2px solid cyan;")
+            self.activity_tabs.setToolTip("ACTIVITY_TABS")
+
+        # Add both widgets as tabs
+        self.activity_tabs.addTab(self.file_progress_list, "Activity")
+        self.activity_tabs.addTab(process_monitor_widget, "Process Monitor")
+
+        upper_hbox.addWidget(user_config_widget, stretch=11)
+        upper_hbox.addWidget(self.activity_tabs, stretch=9)
         upper_hbox.setAlignment(Qt.AlignTop)
         self.upper_section_widget = QWidget()
         self.upper_section_widget.setLayout(upper_hbox)
@@ -2815,11 +2835,11 @@ class InstallTTWScreen(QWidget):
                 self.retry_automated_workflow_with_new_name(new_name)
             elif new_name == modlist_name:
                 # Same name - show warning
-                from jackify.backend.services.message_service import MessageService
+                from jackify.frontends.gui.services.message_service import MessageService
                 MessageService.warning(self, "Same Name", "Please enter a different name to resolve the conflict.")
             else:
                 # Empty name
-                from jackify.backend.services.message_service import MessageService
+                from jackify.frontends.gui.services.message_service import MessageService
                 MessageService.warning(self, "Invalid Name", "Please enter a valid shortcut name.")
         
         def on_cancel():
