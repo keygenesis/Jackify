@@ -468,7 +468,7 @@ class WinetricksHandler:
                 from .protontricks_handler import ProtontricksHandler
                 steamdeck = os.path.exists('/home/deck')
                 protontricks_handler = ProtontricksHandler(steamdeck)
-                protontricks_available = protontricks_handler.is_available()
+                protontricks_available = protontricks_handler.detect_protontricks()
 
                 if protontricks_available:
                     self.logger.warning("=" * 80)

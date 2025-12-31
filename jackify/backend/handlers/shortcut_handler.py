@@ -955,7 +955,10 @@ class ShortcutHandler:
 
     def get_appid_for_shortcut(self, shortcut_name: str, exe_path: Optional[str] = None) -> Optional[str]:
         """
-        Find the current AppID for a given shortcut name and (optionally) executable path using protontricks.
+        Find the current AppID for a given shortcut name and (optionally) executable path.
+
+        Primary method: Read directly from shortcuts.vdf (reliable, no external dependencies)
+        Fallback method: Use protontricks (if available)
 
         Args:
             shortcut_name (str): The name of the Steam shortcut.
@@ -965,15 +968,22 @@ class ShortcutHandler:
             Optional[str]: The found AppID string, or None if not found or error occurs.
         """
         self.logger.info(f"Attempting to find current AppID for shortcut: '{shortcut_name}' (exe_path: '{exe_path}')")
+
         try:
-            from .protontricks_handler import ProtontricksHandler # Local import
+            appid = self.get_appid_from_vdf(shortcut_name, exe_path)
+            if appid:
+                self.logger.info(f"Successfully found AppID {appid} from shortcuts.vdf")
+                return appid
+
+            self.logger.info("AppID not found in shortcuts.vdf, trying protontricks as fallback...")
+            from .protontricks_handler import ProtontricksHandler
             pt_handler = ProtontricksHandler(self.steamdeck)
             if not pt_handler.detect_protontricks():
-                self.logger.error("Protontricks not detected")
+                self.logger.warning("Protontricks not detected - cannot use as fallback")
                 return None
             result = pt_handler.run_protontricks("-l")
             if not result or result.returncode != 0:
-                self.logger.error(f"Protontricks failed to list applications: {result.stderr if result else 'No result'}")
+                self.logger.warning(f"Protontricks fallback failed: {result.stderr if result else 'No result'}")
                 return None
             # Build a list of all shortcuts
             found_shortcuts = []
@@ -1022,8 +1032,64 @@ class ShortcutHandler:
             self.logger.exception("Traceback:")
             return None
 
+    def get_appid_from_vdf(self, shortcut_name: str, exe_path: Optional[str] = None) -> Optional[str]:
+        """
+        Get AppID directly from shortcuts.vdf by reading the file and matching shortcut name/exe.
+        This is more reliable than using protontricks since it doesn't depend on external tools.
+
+        Args:
+            shortcut_name (str): The name of the Steam shortcut.
+            exe_path (Optional[str]): The path to the executable for additional validation.
+
+        Returns:
+            Optional[str]: The AppID as a string, or None if not found.
+        """
+        self.logger.info(f"Looking up AppID from shortcuts.vdf for shortcut: '{shortcut_name}' (exe: '{exe_path}')")
+
+        if not self.shortcuts_path or not os.path.isfile(self.shortcuts_path):
+            self.logger.warning(f"Shortcuts.vdf not found at {self.shortcuts_path}")
+            return None
+
+        try:
+            shortcuts_data = VDFHandler.load(self.shortcuts_path, binary=True)
+            if not shortcuts_data or 'shortcuts' not in shortcuts_data:
+                self.logger.warning("No shortcuts found in shortcuts.vdf")
+                return None
+
+            shortcut_name_clean = shortcut_name.strip().lower()
+
+            for idx, shortcut in shortcuts_data['shortcuts'].items():
+                name = shortcut.get('AppName', shortcut.get('appname', '')).strip()
+
+                if name.lower() == shortcut_name_clean:
+                    appid = shortcut.get('appid')
+
+                    if appid:
+                        if exe_path:
+                            vdf_exe = shortcut.get('Exe', shortcut.get('exe', '')).strip('"').strip()
+                            exe_path_norm = os.path.abspath(os.path.expanduser(exe_path)).lower()
+                            vdf_exe_norm = os.path.abspath(os.path.expanduser(vdf_exe)).lower()
+
+                            if vdf_exe_norm == exe_path_norm:
+                                self.logger.info(f"Found AppID {appid} for shortcut '{name}' with matching exe '{vdf_exe}'")
+                                return str(int(appid) & 0xFFFFFFFF)
+                            else:
+                                self.logger.debug(f"Found shortcut '{name}' but exe doesn't match: '{vdf_exe}' vs '{exe_path}'")
+                                continue
+                        else:
+                            self.logger.info(f"Found AppID {appid} for shortcut '{name}' (no exe validation)")
+                            return str(int(appid) & 0xFFFFFFFF)
+
+            self.logger.warning(f"No matching shortcut found in shortcuts.vdf for '{shortcut_name}'")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error reading shortcuts.vdf: {e}")
+            self.logger.exception("Traceback:")
+            return None
+
     # --- Discovery Methods Moved from ModlistHandler ---
-    
+
     def _scan_shortcuts_for_executable(self, executable_name: str) -> List[Dict[str, str]]:
         """
         Scans the user's shortcuts.vdf file for entries pointing to a specific executable.

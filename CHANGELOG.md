@@ -1,5 +1,23 @@
 # Jackify Changelog
 
+## v0.2.0.9 - Critical Configuration Fixes
+**Release Date:** 2025-12-31
+
+### Bug Fixes
+- Fixed AppID conversion bug causing Configure Existing failures
+- Fixed missing MessageService import crash in Configure Existing
+- Fixed RecursionError in config_handler.py logger
+- Fixed winetricks automatic fallback to protontricks (was silently failing)
+
+### Improvements
+- Added detailed progress indicators for configuration workflows
+- Fixed progress bar completion showing 100% instead of 95%
+- Removed debug logging noise from file progress widget
+- Enhanced Premium detection diagnostics for Issue #111
+- Flatpak protontricks now auto-granted cache access for faster subsequent installs
+
+---
+
 ## v0.2.0.8 - Bug Fixes and Improvements
 **Release Date:** 2025-12-29
 

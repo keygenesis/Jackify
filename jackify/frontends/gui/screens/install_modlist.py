@@ -1881,6 +1881,26 @@ class InstallModlistScreen(QWidget):
                 )
                 return
 
+            # Log authentication status at install start (Issue #111 diagnostics)
+            import logging
+            logger = logging.getLogger(__name__)
+            auth_method = self.auth_service.get_auth_method()
+            logger.info("=" * 60)
+            logger.info("Authentication Status at Install Start")
+            logger.info(f"Method: {auth_method or 'UNKNOWN'}")
+            logger.info(f"Token length: {len(api_key)} chars")
+            if len(api_key) >= 8:
+                logger.info(f"Token (partial): {api_key[:4]}...{api_key[-4:]}")
+
+            if auth_method == 'oauth':
+                token_handler = self.auth_service.token_handler
+                token_info = token_handler.get_token_info()
+                if 'expires_in_minutes' in token_info:
+                    logger.info(f"OAuth expires in: {token_info['expires_in_minutes']:.1f} minutes")
+                if token_info.get('refresh_token_likely_expired'):
+                    logger.warning(f"OAuth refresh token age: {token_info['refresh_token_age_days']:.1f} days (may need re-auth)")
+            logger.info("=" * 60)
+
             modlist_name = self.modlist_name_edit.text().strip()
             missing_fields = []
             if not modlist_name:
@@ -2129,6 +2149,9 @@ class InstallModlistScreen(QWidget):
                 # R&D: Progress state manager for parsing
                 self.progress_state_manager = progress_state_manager
                 self._premium_signal_sent = False
+                # Rolling buffer for Premium detection diagnostics
+                self._engine_output_buffer = []
+                self._buffer_size = 10
             
             def cancel(self):
                 self.cancelled = True
@@ -2196,9 +2219,70 @@ class InstallModlistScreen(QWidget):
                                 from jackify.backend.handlers.config_handler import ConfigHandler
                                 config_handler = ConfigHandler()
                                 debug_mode = config_handler.get('debug_mode', False)
-                                if not self._premium_signal_sent and is_non_premium_indicator(decoded):
+
+                                # Check for Premium detection
+                                is_premium_error, matched_pattern = is_non_premium_indicator(decoded)
+                                if not self._premium_signal_sent and is_premium_error:
                                     self._premium_signal_sent = True
+
+                                    # DIAGNOSTIC LOGGING: Capture false positive details
+                                    import logging
+                                    logger = logging.getLogger(__name__)
+                                    logger.warning("=" * 80)
+                                    logger.warning("PREMIUM DETECTION TRIGGERED - DIAGNOSTIC DUMP (Issue #111)")
+                                    logger.warning("=" * 80)
+                                    logger.warning(f"Matched pattern: '{matched_pattern}'")
+                                    logger.warning(f"Triggering line: '{decoded.strip()}'")
+
+                                    # Detailed auth diagnostics
+                                    logger.warning("")
+                                    logger.warning("AUTHENTICATION DIAGNOSTICS:")
+                                    logger.warning(f"  Auth value present: {'YES' if self.api_key else 'NO'}")
+                                    if self.api_key:
+                                        logger.warning(f"  Auth value length: {len(self.api_key)} chars")
+                                        if len(self.api_key) >= 8:
+                                            logger.warning(f"  Auth value (partial): {self.api_key[:4]}...{self.api_key[-4:]}")
+
+                                        # Determine auth method and get detailed status
+                                        auth_method = self.auth_service.get_auth_method()
+                                        logger.warning(f"  Auth method: {auth_method or 'UNKNOWN'}")
+
+                                        if auth_method == 'oauth':
+                                            # Get detailed OAuth token status
+                                            token_handler = self.auth_service.token_handler
+                                            token_info = token_handler.get_token_info()
+
+                                            logger.warning("  OAuth Token Status:")
+                                            logger.warning(f"    Has token file: {token_info.get('has_token', False)}")
+                                            logger.warning(f"    Has refresh token: {token_info.get('has_refresh_token', False)}")
+
+                                            if 'expires_in_minutes' in token_info:
+                                                logger.warning(f"    Expires in: {token_info['expires_in_minutes']:.1f} minutes")
+                                                logger.warning(f"    Is expired: {token_info.get('is_expired', False)}")
+                                                logger.warning(f"    Expires soon (5min): {token_info.get('expires_soon_5min', False)}")
+
+                                            if 'refresh_token_age_days' in token_info:
+                                                logger.warning(f"    Refresh token age: {token_info['refresh_token_age_days']:.1f} days")
+                                                logger.warning(f"    Refresh token likely expired: {token_info.get('refresh_token_likely_expired', False)}")
+
+                                            if token_info.get('error'):
+                                                logger.warning(f"    Error: {token_info['error']}")
+
+                                    logger.warning("")
+                                    logger.warning("Previous engine output (last 10 lines):")
+                                    for i, buffered_line in enumerate(self._engine_output_buffer, 1):
+                                        logger.warning(f"  -{len(self._engine_output_buffer) - i + 1}: {buffered_line}")
+                                    logger.warning("")
+                                    logger.warning("If user HAS Premium, this is a FALSE POSITIVE")
+                                    logger.warning("Report to: https://github.com/Omni-guides/Jackify/issues/111")
+                                    logger.warning("=" * 80)
+
                                     self.premium_required_detected.emit(decoded.strip() or "Nexus Premium required")
+
+                                # Maintain rolling buffer of engine output for diagnostics
+                                self._engine_output_buffer.append(decoded.strip())
+                                if len(self._engine_output_buffer) > self._buffer_size:
+                                    self._engine_output_buffer.pop(0)
 
                                 # R&D: Process through progress parser
                                 if self.progress_state_manager:
@@ -2221,11 +2305,70 @@ class InstallModlistScreen(QWidget):
                                 line, buffer = buffer.split(b'\n', 1)
                                 line = ansi_escape.sub(b'', line)
                                 decoded = line.decode('utf-8', errors='replace')
-                                
+
                                 # Notify when Nexus requires Premium before continuing
-                                if not self._premium_signal_sent and is_non_premium_indicator(decoded):
+                                is_premium_error, matched_pattern = is_non_premium_indicator(decoded)
+                                if not self._premium_signal_sent and is_premium_error:
                                     self._premium_signal_sent = True
+
+                                    # DIAGNOSTIC LOGGING: Capture false positive details
+                                    import logging
+                                    logger = logging.getLogger(__name__)
+                                    logger.warning("=" * 80)
+                                    logger.warning("PREMIUM DETECTION TRIGGERED - DIAGNOSTIC DUMP (Issue #111)")
+                                    logger.warning("=" * 80)
+                                    logger.warning(f"Matched pattern: '{matched_pattern}'")
+                                    logger.warning(f"Triggering line: '{decoded.strip()}'")
+
+                                    # Detailed auth diagnostics
+                                    logger.warning("")
+                                    logger.warning("AUTHENTICATION DIAGNOSTICS:")
+                                    logger.warning(f"  Auth value present: {'YES' if self.api_key else 'NO'}")
+                                    if self.api_key:
+                                        logger.warning(f"  Auth value length: {len(self.api_key)} chars")
+                                        if len(self.api_key) >= 8:
+                                            logger.warning(f"  Auth value (partial): {self.api_key[:4]}...{self.api_key[-4:]}")
+
+                                        # Determine auth method and get detailed status
+                                        auth_method = self.auth_service.get_auth_method()
+                                        logger.warning(f"  Auth method: {auth_method or 'UNKNOWN'}")
+
+                                        if auth_method == 'oauth':
+                                            # Get detailed OAuth token status
+                                            token_handler = self.auth_service.token_handler
+                                            token_info = token_handler.get_token_info()
+
+                                            logger.warning("  OAuth Token Status:")
+                                            logger.warning(f"    Has token file: {token_info.get('has_token', False)}")
+                                            logger.warning(f"    Has refresh token: {token_info.get('has_refresh_token', False)}")
+
+                                            if 'expires_in_minutes' in token_info:
+                                                logger.warning(f"    Expires in: {token_info['expires_in_minutes']:.1f} minutes")
+                                                logger.warning(f"    Is expired: {token_info.get('is_expired', False)}")
+                                                logger.warning(f"    Expires soon (5min): {token_info.get('expires_soon_5min', False)}")
+
+                                            if 'refresh_token_age_days' in token_info:
+                                                logger.warning(f"    Refresh token age: {token_info['refresh_token_age_days']:.1f} days")
+                                                logger.warning(f"    Refresh token likely expired: {token_info.get('refresh_token_likely_expired', False)}")
+
+                                            if token_info.get('error'):
+                                                logger.warning(f"    Error: {token_info['error']}")
+
+                                    logger.warning("")
+                                    logger.warning("Previous engine output (last 10 lines):")
+                                    for i, buffered_line in enumerate(self._engine_output_buffer, 1):
+                                        logger.warning(f"  -{len(self._engine_output_buffer) - i + 1}: {buffered_line}")
+                                    logger.warning("")
+                                    logger.warning("If user HAS Premium, this is a FALSE POSITIVE")
+                                    logger.warning("Report to: https://github.com/Omni-guides/Jackify/issues/111")
+                                    logger.warning("=" * 80)
+
                                     self.premium_required_detected.emit(decoded.strip() or "Nexus Premium required")
+
+                                # Maintain rolling buffer of engine output for diagnostics
+                                self._engine_output_buffer.append(decoded.strip())
+                                if len(self._engine_output_buffer) > self._buffer_size:
+                                    self._engine_output_buffer.pop(0)
 
                                 # R&D: Process through progress parser
                                 from jackify.backend.handlers.config_handler import ConfigHandler

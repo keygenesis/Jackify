@@ -777,6 +777,56 @@ class ProtontricksHandler:
             self.logger.error(f"Error running protontricks-launch: {e}")
             return None
     
+    def _ensure_flatpak_cache_access(self, cache_path: Path) -> bool:
+        """
+        Ensure flatpak protontricks has filesystem access to the winetricks cache.
+
+        Args:
+            cache_path: Path to winetricks cache directory
+
+        Returns:
+            True if access granted or already exists, False on failure
+        """
+        if self.which_protontricks != 'flatpak':
+            return True  # Not flatpak, no action needed
+
+        try:
+            # Check if flatpak already has access to this path
+            result = subprocess.run(
+                ['flatpak', 'override', '--user', '--show', 'com.github.Matoking.protontricks'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0:
+                # Check if cache path is already in filesystem overrides
+                cache_str = str(cache_path.resolve())
+                if f'filesystems=' in result.stdout and cache_str in result.stdout:
+                    self.logger.debug(f"Flatpak protontricks already has access to cache: {cache_str}")
+                    return True
+
+            # Grant access to cache directory
+            self.logger.info(f"Granting flatpak protontricks access to winetricks cache: {cache_path}")
+            result = subprocess.run(
+                ['flatpak', 'override', '--user', 'com.github.Matoking.protontricks',
+                 f'--filesystem={cache_path.resolve()}'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0:
+                self.logger.info("Successfully granted flatpak protontricks cache access")
+                return True
+            else:
+                self.logger.warning(f"Failed to grant flatpak cache access: {result.stderr}")
+                return False
+
+        except Exception as e:
+            self.logger.warning(f"Could not configure flatpak cache access: {e}")
+            return False
+
     def install_wine_components(self, appid, game_var, specific_components: Optional[List[str]] = None):
         """
         Install the specified Wine components into the given prefix using protontricks.
@@ -820,6 +870,10 @@ class ProtontricksHandler:
         from jackify.shared.paths import get_jackify_data_dir
         jackify_cache_dir = get_jackify_data_dir() / 'winetricks_cache'
         jackify_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Ensure flatpak protontricks has access to cache (no-op for native)
+        self._ensure_flatpak_cache_access(jackify_cache_dir)
+
         env['WINETRICKS_CACHE'] = str(jackify_cache_dir)
         self.logger.info(f"Using winetricks cache: {jackify_cache_dir}")
         if specific_components is not None:

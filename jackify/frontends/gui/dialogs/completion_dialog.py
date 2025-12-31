@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap, QIcon
 
+from jackify.shared.paths import get_jackify_logs_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,6 +200,6 @@ Modlist Install and Configuration complete!:
 NOTE: If you experience ENB issues, consider using GE-Proton 10-14 instead of
 Valve's Proton 10 (known ENB compatibility issues in Valve's Proton 10).
 
-Detailed log available at: ~/Jackify/logs/Configure_New_Modlist_workflow.log"""
+Detailed log available at: {get_jackify_logs_dir()}/Configure_New_Modlist_workflow.log"""
 
         return completion_text 

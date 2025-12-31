@@ -571,15 +571,19 @@ class ModlistMenuHandler:
                     self.logger.warning(f"[DEBUG] Could not find AppID for {context['name']} with exe {context['mo2_exe_path']}")
         set_modlist_result = self.modlist_handler.set_modlist(context)
         self.logger.debug(f"[DEBUG] set_modlist returned: {set_modlist_result}")
+
+        # Check GUI mode early to avoid input() calls in GUI context
+        import os
+        gui_mode = os.environ.get('JACKIFY_GUI_MODE') == '1'
+
         if not set_modlist_result:
             print(f"{COLOR_ERROR}\nError setting up context for configuration.{COLOR_RESET}")
             self.logger.error(f"set_modlist failed for {context.get('name')}")
-            input(f"\n{COLOR_PROMPT}Press Enter to continue...{COLOR_RESET}")
+            if not gui_mode:
+                input(f"\n{COLOR_PROMPT}Press Enter to continue...{COLOR_RESET}")
             return False
 
         # --- Resolution selection logic for GUI mode ---
-        import os
-        gui_mode = os.environ.get('JACKIFY_GUI_MODE') == '1'
         selected_resolution = context.get('resolution', None)
         if gui_mode:
             # If resolution is provided, set it and do not prompt
@@ -654,7 +658,8 @@ class ModlistMenuHandler:
         print("NOTE: If you experience ENB issues, consider using GE-Proton 10-14 instead of")
         print("      Valve's Proton 10 (known ENB compatibility issues in Valve's Proton 10).")
         print("")
-        print("Detailed log available at: ~/Jackify/logs/Configure_New_Modlist_workflow.log")
+        from jackify.shared.paths import get_jackify_logs_dir
+        print(f"Detailed log available at: {get_jackify_logs_dir()}/Configure_New_Modlist_workflow.log")
         # Only wait for input in CLI mode, not GUI mode
         if not gui_mode:
             input(f"{COLOR_PROMPT}Press Enter to return to the menu...{COLOR_RESET}")

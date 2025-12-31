@@ -612,12 +612,18 @@ class ConfigureNewModlistScreen(QWidget):
             self.progress_indicator.set_status("Creating Proton prefix...", 50)
         elif "prefix created" in message_lower or "prefix creation" in message_lower and "success" in message_lower:
             self.progress_indicator.set_status("Proton prefix created", 70)
+        elif "applying curated registry" in message_lower or "registry" in message_lower:
+            self.progress_indicator.set_status("Applying registry files...", 75)
+        elif "installing wine components" in message_lower or "wine component" in message_lower:
+            self.progress_indicator.set_status("Installing wine components...", 80)
+        elif "dotnet" in message_lower and "fix" in message_lower:
+            self.progress_indicator.set_status("Applying dotnet fixes...", 85)
+        elif "setting ownership" in message_lower or "ownership and permissions" in message_lower:
+            self.progress_indicator.set_status("Setting permissions...", 90)
         elif "verifying" in message_lower:
-            self.progress_indicator.set_status("Verifying setup...", 80)
+            self.progress_indicator.set_status("Verifying setup...", 95)
         elif "steam integration complete" in message_lower or "configuration complete" in message_lower:
-            self.progress_indicator.set_status("Configuration complete", 95)
-        elif "complete" in message_lower and not "prefix" in message_lower:
-            self.progress_indicator.set_status("Finishing up...", 90)
+            self.progress_indicator.set_status("Configuration complete", 100)
 
         # Update activity window with generic configuration status
         # Only update if message contains meaningful progress (not blank lines or separators)

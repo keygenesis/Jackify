@@ -493,54 +493,54 @@ exit"""
     def detect_actual_prefix_appid(self, initial_appid: int, shortcut_name: str) -> Optional[int]:
         """
         After Steam restart, detect the actual prefix AppID that was created.
-        Use protontricks -l to find the actual positive AppID.
-        
+        Uses direct VDF file reading to find the actual AppID.
+
         Args:
             initial_appid: The initial (negative) AppID from shortcuts.vdf
             shortcut_name: Name of the shortcut for logging
-            
+
         Returns:
             The actual (positive) AppID of the created prefix, or None if not found
         """
         try:
-            logger.info(f"Using protontricks -l to detect actual AppID for shortcut: {shortcut_name}")
-            
-            # Wait up to 30 seconds for the shortcut to appear in protontricks
+            logger.info(f"Using VDF to detect actual AppID for shortcut: {shortcut_name}")
+
+            # Wait up to 30 seconds for Steam to process the shortcut
             for i in range(30):
                 try:
-                    # Use the existing protontricks handler
-                    from jackify.backend.handlers.protontricks_handler import ProtontricksHandler
-                    protontricks_handler = ProtontricksHandler(steamdeck or False)
-                    result = protontricks_handler.run_protontricks('-l')
-                    
-                    if result.returncode == 0:
-                        lines = result.stdout.strip().split('\n')
-                        
-                        # Look for our shortcut name in the protontricks output
-                        for line in lines:
-                            if shortcut_name in line and 'Non-Steam shortcut:' in line:
-                                # Extract AppID from line like "Non-Steam shortcut: Tuxborn (3106560878)"
-                                if '(' in line and ')' in line:
-                                    appid_str = line.split('(')[1].split(')')[0]
-                                    actual_appid = int(appid_str)
-                                    logger.info(f" Found shortcut in protontricks: {line.strip()}")
-                                    logger.info(f"  Initial AppID: {initial_appid}")
-                                    logger.info(f"  Actual AppID: {actual_appid}")
-                                    return actual_appid
-                    
-                    logger.debug(f"Shortcut '{shortcut_name}' not found in protontricks yet (attempt {i+1}/30)")
+                    from ..handlers.shortcut_handler import ShortcutHandler
+                    from ..handlers.path_handler import PathHandler
+
+                    path_handler = PathHandler()
+                    shortcuts_path = path_handler._find_shortcuts_vdf()
+
+                    if shortcuts_path:
+                        from ..handlers.vdf_handler import VDFHandler
+                        shortcuts_data = VDFHandler.load(shortcuts_path, binary=True)
+
+                        if shortcuts_data and 'shortcuts' in shortcuts_data:
+                            for idx, shortcut in shortcuts_data['shortcuts'].items():
+                                app_name = shortcut.get('AppName', shortcut.get('appname', '')).strip()
+
+                                if app_name.lower() == shortcut_name.lower():
+                                    appid = shortcut.get('appid')
+                                    if appid:
+                                        actual_appid = int(appid) & 0xFFFFFFFF
+                                        logger.info(f"Found shortcut '{app_name}' in shortcuts.vdf")
+                                        logger.info(f"  Initial AppID (signed): {initial_appid}")
+                                        logger.info(f"  Actual AppID (unsigned): {actual_appid}")
+                                        return actual_appid
+
+                    logger.debug(f"Shortcut '{shortcut_name}' not found in VDF yet (attempt {i+1}/30)")
                     time.sleep(1)
-                    
-                except subprocess.TimeoutExpired:
-                    logger.warning(f"protontricks -l timed out on attempt {i+1}")
-                    time.sleep(1)
+
                 except Exception as e:
-                    logger.warning(f"Error running protontricks -l on attempt {i+1}: {e}")
+                    logger.warning(f"Error reading shortcuts.vdf on attempt {i+1}: {e}")
                     time.sleep(1)
-            
-            logger.error(f"Shortcut '{shortcut_name}' not found in protontricks after 30 seconds")
+
+            logger.error(f"Shortcut '{shortcut_name}' not found in shortcuts.vdf after 30 seconds")
             return None
-            
+
         except Exception as e:
             logger.error(f"Error detecting actual prefix AppID: {e}")
             return None

@@ -22,6 +22,7 @@ from jackify.backend.services.api_key_service import APIKeyService
 from jackify.backend.services.resolution_service import ResolutionService
 from jackify.backend.handlers.config_handler import ConfigHandler
 from ..dialogs import SuccessDialog
+from jackify.frontends.gui.services.message_service import MessageService
 
 def debug_print(message):
     """Print debug message only if debug mode is enabled"""
@@ -522,22 +523,20 @@ class ConfigureExistingModlistScreen(QWidget):
         message_lower = text.lower()
 
         # Update progress indicator based on key status messages
-        if "creating steam shortcut" in message_lower:
-            self.progress_indicator.set_status("Creating Steam shortcut...", 10)
-        elif "restarting steam" in message_lower or "restart steam" in message_lower:
-            self.progress_indicator.set_status("Restarting Steam...", 20)
-        elif "steam restart" in message_lower and "success" in message_lower:
-            self.progress_indicator.set_status("Steam restarted successfully", 30)
-        elif "creating proton prefix" in message_lower or "prefix creation" in message_lower:
-            self.progress_indicator.set_status("Creating Proton prefix...", 50)
-        elif "prefix created" in message_lower or "prefix creation" in message_lower and "success" in message_lower:
-            self.progress_indicator.set_status("Proton prefix created", 70)
+        if "setting protontricks permissions" in message_lower or "permissions" in message_lower:
+            self.progress_indicator.set_status("Setting permissions...", 20)
+        elif "applying curated registry" in message_lower or "registry" in message_lower:
+            self.progress_indicator.set_status("Applying registry files...", 40)
+        elif "installing wine components" in message_lower or "wine component" in message_lower:
+            self.progress_indicator.set_status("Installing wine components...", 60)
+        elif "dotnet" in message_lower and "fix" in message_lower:
+            self.progress_indicator.set_status("Applying dotnet fixes...", 75)
+        elif "setting ownership" in message_lower or "ownership and permissions" in message_lower:
+            self.progress_indicator.set_status("Setting permissions...", 85)
         elif "verifying" in message_lower:
-            self.progress_indicator.set_status("Verifying setup...", 80)
+            self.progress_indicator.set_status("Verifying setup...", 90)
         elif "steam integration complete" in message_lower or "configuration complete" in message_lower:
-            self.progress_indicator.set_status("Configuration complete", 95)
-        elif "complete" in message_lower and not "prefix" in message_lower:
-            self.progress_indicator.set_status("Finishing up...", 90)
+            self.progress_indicator.set_status("Configuration complete", 100)
 
         # Update activity window with generic configuration status
         # Only update if message contains meaningful progress (not blank lines or separators)

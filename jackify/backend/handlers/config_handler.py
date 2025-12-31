@@ -6,6 +6,7 @@ Handles application settings and configuration
 """
 
 import os
+import sys
 import json
 import logging
 import shutil
@@ -211,7 +212,8 @@ class ConfigHandler:
                     config.update(saved_config)
             return config
         except Exception as e:
-            logger.error(f"Error reading configuration from disk: {e}")
+            # Don't use logger here - can cause recursion if logger tries to access config
+            print(f"Warning: Error reading configuration from disk: {e}", file=sys.stderr)
             return self.settings.copy()
 
     def reload_config(self):
