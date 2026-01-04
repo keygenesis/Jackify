@@ -34,7 +34,7 @@ def _get_user_proton_version():
         # get_proton_path() returns the Install Proton path
         user_proton_path = config_handler.get_proton_path()
 
-        if user_proton_path == 'auto':
+        if not user_proton_path or user_proton_path == 'auto':
             # Use enhanced fallback logic with GE-Proton preference
             logging.info("User selected auto-detect, using GE-Proton → Experimental → Proton precedence")
             return WineUtils.select_best_proton()
@@ -502,10 +502,11 @@ class ModlistInstallCLI:
                     print("\n" + "-" * 28)
                     print(f"{COLOR_INFO}Nexus Authentication: Using API Key (Legacy){COLOR_RESET}")
 
-                # Get valid token/key
-                api_key = auth_service.ensure_valid_auth()
+                # Get valid token/key and OAuth state for engine auto-refresh
+                api_key, oauth_info = auth_service.get_auth_for_engine()
                 if api_key:
                     self.context['nexus_api_key'] = api_key
+                    self.context['nexus_oauth_info'] = oauth_info  # For engine auto-refresh
                 else:
                     # Auth expired or invalid - prompt to set up
                     print(f"\n{COLOR_WARNING}Your authentication has expired or is invalid.{COLOR_RESET}")
@@ -538,9 +539,10 @@ class ModlistInstallCLI:
                         if username:
                             print(f"{COLOR_INFO}Authorized as: {username}{COLOR_RESET}")
 
-                        api_key = auth_service.ensure_valid_auth()
+                        api_key, oauth_info = auth_service.get_auth_for_engine()
                         if api_key:
                             self.context['nexus_api_key'] = api_key
+                            self.context['nexus_oauth_info'] = oauth_info  # For engine auto-refresh
                         else:
                             print(f"{COLOR_ERROR}Failed to retrieve auth token after authorization.{COLOR_RESET}")
                             return None
@@ -738,6 +740,7 @@ class ModlistInstallCLI:
             modlist_arg = self.context.get('modlist_value') or self.context.get('machineid')
             machineid = self.context.get('machineid')
             api_key = self.context.get('nexus_api_key')
+            oauth_info = self.context.get('nexus_oauth_info')
 
             # Path to the engine binary
             engine_path = get_jackify_engine_path()
@@ -779,24 +782,37 @@ class ModlistInstallCLI:
             # Store original environment values to restore later
             original_env_values = {
                 'NEXUS_API_KEY': os.environ.get('NEXUS_API_KEY'),
+                'NEXUS_OAUTH_INFO': os.environ.get('NEXUS_OAUTH_INFO'),
                 'DOTNET_SYSTEM_GLOBALIZATION_INVARIANT': os.environ.get('DOTNET_SYSTEM_GLOBALIZATION_INVARIANT')
             }
 
             try:
                 # Temporarily modify current process's environment
-                if api_key:
+                # Prefer NEXUS_OAUTH_INFO (supports auto-refresh) over NEXUS_API_KEY (legacy)
+                if oauth_info:
+                    os.environ['NEXUS_OAUTH_INFO'] = oauth_info
+                    self.logger.debug(f"Set NEXUS_OAUTH_INFO for engine (supports auto-refresh)")
+                    # Also set NEXUS_API_KEY for backward compatibility
+                    if api_key:
+                        os.environ['NEXUS_API_KEY'] = api_key
+                elif api_key:
+                    # No OAuth info, use API key only (no auto-refresh support)
                     os.environ['NEXUS_API_KEY'] = api_key
-                    self.logger.debug(f"Temporarily set os.environ['NEXUS_API_KEY'] for engine call using session-provided key.")
-                elif 'NEXUS_API_KEY' in os.environ: # api_key is None/empty, but a system key might exist
-                    self.logger.debug(f"Session API key not provided. Temporarily removing inherited NEXUS_API_KEY ('{'[REDACTED]' if os.environ.get('NEXUS_API_KEY') else 'None'}') from os.environ for engine call to ensure it is not used.")
-                    del os.environ['NEXUS_API_KEY'] 
-                # If api_key is None and NEXUS_API_KEY was not in os.environ, it remains unset, which is correct.
+                    self.logger.debug(f"Set NEXUS_API_KEY for engine (no auto-refresh)")
+                else:
+                    # No auth available, clear any inherited values
+                    if 'NEXUS_API_KEY' in os.environ:
+                        del os.environ['NEXUS_API_KEY']
+                    if 'NEXUS_OAUTH_INFO' in os.environ:
+                        del os.environ['NEXUS_OAUTH_INFO']
+                    self.logger.debug(f"No Nexus auth available, cleared inherited env vars")
 
                 os.environ['DOTNET_SYSTEM_GLOBALIZATION_INVARIANT'] = "1"
                 self.logger.debug(f"Temporarily set os.environ['DOTNET_SYSTEM_GLOBALIZATION_INVARIANT'] = '1' for engine call.")
                 
                 self.logger.info("Environment prepared for jackify-engine install process by modifying os.environ.")
                 self.logger.debug(f"NEXUS_API_KEY in os.environ (pre-call): {'[SET]' if os.environ.get('NEXUS_API_KEY') else '[NOT SET]'}")
+                self.logger.debug(f"NEXUS_OAUTH_INFO in os.environ (pre-call): {'[SET]' if os.environ.get('NEXUS_OAUTH_INFO') else '[NOT SET]'}")
                 
                 pretty_cmd = ' '.join([f'"{arg}"' if ' ' in arg else arg for arg in cmd])
                 print(f"{COLOR_INFO}Launching Jackify Install Engine with command:{COLOR_RESET} {pretty_cmd}")

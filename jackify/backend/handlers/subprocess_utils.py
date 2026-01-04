@@ -41,8 +41,8 @@ def get_clean_subprocess_env(extra_env=None):
     """
     Returns a copy of os.environ with bundled-runtime variables and other problematic entries removed.
     Optionally merges in extra_env dict.
-    Also ensures bundled tools (lz4, unzip, etc.) are in PATH when running as AppImage.
-    CRITICAL: Preserves system PATH to ensure system tools (like lz4) are available.
+    Also ensures bundled tools (lz4, cabextract, winetricks) are in PATH when running as AppImage.
+    CRITICAL: Preserves system PATH to ensure system utilities (wget, curl, unzip, xz, gzip, sha256sum) are available.
     """
     from pathlib import Path
     
@@ -73,7 +73,8 @@ def get_clean_subprocess_env(extra_env=None):
             path_parts.append(sys_path)
 
     # Add bundled tools directory to PATH if running as AppImage
-    # This ensures lz4, unzip, xz, etc. are available to subprocesses
+    # This ensures lz4, cabextract, and winetricks are available to subprocesses
+    # System utilities (wget, curl, unzip, xz, gzip, sha256sum) come from system PATH
     # Note: appdir was saved before env cleanup above
     tools_dir = None
     
@@ -100,22 +101,22 @@ def get_clean_subprocess_env(extra_env=None):
                 tools_dir = str(possible_dir)
                 break
     
-    # Build final PATH: bundled tools first (if any), then original PATH with system paths
+    # Build final PATH: system PATH first, then bundled tools (lz4, cabextract, winetricks)
+    # System utilities (wget, curl, unzip, xz, gzip, sha256sum) are preferred from system
     final_path_parts = []
-    if tools_dir and os.path.isdir(tools_dir):
-        # Prepend tools directory so bundled tools take precedence
-        # This is critical - bundled lz4 must come before system lz4
-        final_path_parts.append(tools_dir)
     
-    # Add all other paths (preserving order, removing duplicates)
-    # Note: AppRun already sets PATH with tools directory, but we ensure it's first
+    # Add all other paths first (system utilities take precedence)
     seen = set()
-    if tools_dir:
-        seen.add(tools_dir)  # Already added, don't add again
     for path_part in path_parts:
         if path_part and path_part not in seen:
             final_path_parts.append(path_part)
             seen.add(path_part)
+    
+    # Then add bundled tools directory (for lz4, cabextract, winetricks)
+    if tools_dir and os.path.isdir(tools_dir) and tools_dir not in seen:
+        final_path_parts.append(tools_dir)
+        seen.add(tools_dir)
+    
     
     env['PATH'] = ':'.join(final_path_parts)
     

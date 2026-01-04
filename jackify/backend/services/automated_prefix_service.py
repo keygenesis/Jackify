@@ -71,7 +71,7 @@ class AutomatedPrefixService:
             config_handler = ConfigHandler()
             user_proton_path = config_handler.get_game_proton_path()
 
-            if user_proton_path == 'auto':
+            if not user_proton_path or user_proton_path == 'auto':
                 # Use enhanced fallback logic with GE-Proton preference
                 logger.info("User selected auto-detect, using GE-Proton → Experimental → Proton precedence")
                 return WineUtils.select_best_proton()
@@ -3095,20 +3095,20 @@ echo Prefix creation complete.
             env['WINEPREFIX'] = prefix_path
             env['WINEDEBUG'] = '-all'  # Suppress Wine debug output
 
-            # Registry fix 1: Set mscoree=native DLL override
+            # Registry fix 1: Set *mscoree=native DLL override (asterisk for full override)
             # This tells Wine to use native .NET runtime instead of Wine's implementation
-            logger.debug("Setting mscoree=native DLL override...")
+            logger.debug("Setting *mscoree=native DLL override...")
             cmd1 = [
                 wine_binary, 'reg', 'add',
                 'HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides',
-                '/v', 'mscoree', '/t', 'REG_SZ', '/d', 'native', '/f'
+                '/v', '*mscoree', '/t', 'REG_SZ', '/d', 'native', '/f'
             ]
 
             result1 = subprocess.run(cmd1, env=env, capture_output=True, text=True, errors='replace')
             if result1.returncode == 0:
-                logger.info("Successfully applied mscoree=native DLL override")
+                logger.info("Successfully applied *mscoree=native DLL override")
             else:
-                logger.warning(f"Failed to set mscoree DLL override: {result1.stderr}")
+                logger.warning(f"Failed to set *mscoree DLL override: {result1.stderr}")
 
             # Registry fix 2: Set OnlyUseLatestCLR=1
             # This prevents .NET version conflicts by using the latest CLR
@@ -3140,37 +3140,94 @@ echo Prefix creation complete.
     def _find_wine_binary_for_registry(self, modlist_compatdata_path: str) -> Optional[str]:
         """Find the appropriate Wine binary for registry operations"""
         try:
-            # Method 1: Try to detect from Steam's config or use Proton from compat data
-            # Look for wine binary in common Proton locations
-            proton_paths = [
-                os.path.expanduser("~/.local/share/Steam/compatibilitytools.d"),
-                os.path.expanduser("~/.steam/steam/steamapps/common")
-            ]
+            from ..handlers.config_handler import ConfigHandler
+            from ..handlers.wine_utils import WineUtils
+            
+            # Method 1: Use the user's configured Proton version from settings
+            config_handler = ConfigHandler()
+            user_proton_path = config_handler.get_game_proton_path()
 
-            for base_path in proton_paths:
-                if os.path.exists(base_path):
-                    for item in os.listdir(base_path):
-                        if 'proton' in item.lower():
-                            wine_path = os.path.join(base_path, item, 'files', 'bin', 'wine')
-                            if os.path.exists(wine_path):
-                                logger.debug(f"Found Wine binary: {wine_path}")
-                                return wine_path
+            if user_proton_path and user_proton_path != 'auto':
+                # User has selected a specific Proton version
+                proton_path = Path(user_proton_path).expanduser()
 
-            # Method 2: Fallback to system wine if available
-            try:
-                result = subprocess.run(['which', 'wine'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    wine_path = result.stdout.strip()
-                    logger.debug(f"Using system Wine binary: {wine_path}")
-                    return wine_path
-            except Exception:
-                pass
+                # Check for wine binary in both GE-Proton and Valve Proton structures
+                wine_candidates = [
+                    proton_path / "files" / "bin" / "wine",  # GE-Proton structure
+                    proton_path / "dist" / "bin" / "wine"    # Valve Proton structure
+                ]
 
-            logger.error("No suitable Wine binary found for registry operations")
+                for wine_path in wine_candidates:
+                    if wine_path.exists() and wine_path.is_file():
+                        logger.info(f"Using Wine binary from user's configured Proton: {wine_path}")
+                        return str(wine_path)
+
+                # Wine binary not found at expected paths - search recursively in Proton directory
+                logger.debug(f"Wine binary not found at expected paths in {proton_path}, searching recursively...")
+                wine_binary = self._search_wine_in_proton_directory(proton_path)
+                if wine_binary:
+                    logger.info(f"Found Wine binary via recursive search in Proton directory: {wine_binary}")
+                    return wine_binary
+
+                logger.warning(f"User's configured Proton path has no wine binary: {user_proton_path}")
+
+            # Method 2: Fallback to auto-detection using WineUtils
+            best_proton = WineUtils.select_best_proton()
+            if best_proton:
+                wine_binary = WineUtils.find_proton_binary(best_proton['name'])
+                if wine_binary:
+                    logger.info(f"Using Wine binary from detected Proton: {wine_binary}")
+                    return wine_binary
+
+            # NEVER fall back to system wine - it will break Proton prefixes with architecture mismatches
+            logger.error("No suitable Proton Wine binary found for registry operations")
             return None
 
         except Exception as e:
             logger.error(f"Error finding Wine binary: {e}")
+            return None
+
+    def _search_wine_in_proton_directory(self, proton_path: Path) -> Optional[str]:
+        """
+        Recursively search for wine binary within a Proton directory.
+        This handles cases where the directory structure might differ between Proton versions.
+        
+        Args:
+            proton_path: Path to the Proton directory to search
+            
+        Returns:
+            Path to wine binary if found, None otherwise
+        """
+        try:
+            if not proton_path.exists() or not proton_path.is_dir():
+                return None
+
+            # Search for 'wine' executable (not 'wine64' or 'wine-preloader')
+            # Limit search depth to avoid scanning entire filesystem
+            max_depth = 5
+            for root, dirs, files in os.walk(proton_path, followlinks=False):
+                # Calculate depth relative to proton_path
+                try:
+                    depth = len(Path(root).relative_to(proton_path).parts)
+                except ValueError:
+                    # Path is not relative to proton_path (shouldn't happen, but be safe)
+                    continue
+                    
+                if depth > max_depth:
+                    dirs.clear()  # Don't descend further
+                    continue
+                
+                # Check if 'wine' is in this directory
+                if 'wine' in files:
+                    wine_path = Path(root) / 'wine'
+                    # Verify it's actually an executable file
+                    if wine_path.is_file() and os.access(wine_path, os.X_OK):
+                        logger.debug(f"Found wine binary at: {wine_path}")
+                        return str(wine_path)
+
+            return None
+        except Exception as e:
+            logger.debug(f"Error during recursive wine search in {proton_path}: {e}")
             return None
 
     def _inject_game_registry_entries(self, modlist_compatdata_path: str):

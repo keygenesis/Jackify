@@ -149,7 +149,7 @@ class WinetricksHandler:
 
             # If user selected a specific Proton, try that first
             wine_binary = None
-            if user_proton_path != 'auto':
+            if user_proton_path and user_proton_path != 'auto':
                 # Check if user-selected Proton still exists
                 if os.path.exists(user_proton_path):
                     # Resolve symlinks to handle ~/.steam/steam -> ~/.local/share/Steam
@@ -582,7 +582,7 @@ class WinetricksHandler:
             user_proton_path = config.get_proton_path()
 
             wine_binary = None
-            if user_proton_path != 'auto':
+            if user_proton_path and user_proton_path != 'auto':
                 if os.path.exists(user_proton_path):
                     resolved_proton_path = os.path.realpath(user_proton_path)
                     valve_proton_wine = os.path.join(resolved_proton_path, 'dist', 'bin', 'wine')
@@ -594,8 +594,8 @@ class WinetricksHandler:
                         wine_binary = ge_proton_wine
 
             if not wine_binary:
-                if user_proton_path == 'auto':
-                    self.logger.info("Auto-detecting Proton (user selected 'auto')")
+                if not user_proton_path or user_proton_path == 'auto':
+                    self.logger.info("Auto-detecting Proton (user selected 'auto' or path not set)")
                     best_proton = WineUtils.select_best_proton()
                     if best_proton:
                         wine_binary = WineUtils.find_proton_binary(best_proton['name'])
@@ -811,7 +811,7 @@ class WinetricksHandler:
 
             # If user selected a specific Proton, try that first
             wine_binary = None
-            if user_proton_path != 'auto':
+            if user_proton_path and user_proton_path != 'auto':
                 if os.path.exists(user_proton_path):
                     resolved_proton_path = os.path.realpath(user_proton_path)
                     valve_proton_wine = os.path.join(resolved_proton_path, 'dist', 'bin', 'wine')
@@ -822,10 +822,10 @@ class WinetricksHandler:
                     elif os.path.exists(ge_proton_wine):
                         wine_binary = ge_proton_wine
 
-            # Only auto-detect if user explicitly chose 'auto'
+            # Only auto-detect if user explicitly chose 'auto' or path is not set
             if not wine_binary:
-                if user_proton_path == 'auto':
-                    self.logger.info("Auto-detecting Proton (user selected 'auto')")
+                if not user_proton_path or user_proton_path == 'auto':
+                    self.logger.info("Auto-detecting Proton (user selected 'auto' or path not set)")
                     best_proton = WineUtils.select_best_proton()
                     if best_proton:
                         wine_binary = WineUtils.find_proton_binary(best_proton['name'])

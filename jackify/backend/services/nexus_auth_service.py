@@ -228,16 +228,65 @@ class NexusAuthService:
 
         return auth_token
 
-    def get_auth_for_engine(self) -> Optional[str]:
+    def get_auth_for_engine(self) -> Tuple[Optional[str], Optional[str]]:
         """
-        Get authentication token for jackify-engine
-        Same as ensure_valid_auth() - engine uses NEXUS_API_KEY env var for both OAuth and API keys
-        (This matches upstream Wabbajack behavior)
+        Get authentication for jackify-engine with auto-refresh support
+
+        Returns both NEXUS_API_KEY (for backward compat) and NEXUS_OAUTH_INFO (for auto-refresh).
+        When NEXUS_OAUTH_INFO is provided, the engine can automatically refresh expired tokens
+        during long installations.
 
         Returns:
-            Valid auth token to pass via NEXUS_API_KEY environment variable, or None
+            Tuple of (nexus_api_key, nexus_oauth_info_json)
+            - nexus_api_key: Access token or API key (for backward compat)
+            - nexus_oauth_info_json: Full OAuth state JSON (for auto-refresh) or None
         """
-        return self.ensure_valid_auth()
+        import json
+        import time
+
+        # Check if using OAuth and ensure token is fresh
+        if self.token_handler.has_token():
+            # Refresh token if expired (15 minute buffer for long installs)
+            access_token = self._get_oauth_token()
+            if not access_token:
+                logger.warning("OAuth token refresh failed, cannot provide auth to engine")
+                return (None, None)
+
+            # Load the refreshed token data
+            token_data = self.token_handler.load_token()
+
+            if token_data:
+                oauth_data = token_data.get('oauth', {})
+
+                # Build NexusOAuthState JSON matching upstream Wabbajack format
+                # This allows engine to auto-refresh tokens during long installations
+                nexus_oauth_state = {
+                    "oauth": {
+                        "access_token": oauth_data.get('access_token'),
+                        "token_type": oauth_data.get('token_type', 'Bearer'),
+                        "expires_in": oauth_data.get('expires_in', 3600),
+                        "refresh_token": oauth_data.get('refresh_token'),
+                        "scope": oauth_data.get('scope', 'public openid profile'),
+                        "created_at": oauth_data.get('created_at', int(time.time())),
+                        "_received_at": token_data.get('_saved_at', int(time.time())) * 10000000 + 116444736000000000  # Convert Unix to Windows FILETIME
+                    },
+                    "api_key": ""
+                }
+
+                nexus_oauth_json = json.dumps(nexus_oauth_state)
+                access_token = oauth_data.get('access_token')
+
+                logger.info("Providing OAuth state to engine for auto-refresh capability")
+                return (access_token, nexus_oauth_json)
+
+        # Fall back to API key (no auto-refresh support)
+        api_key = self.api_key_service.get_saved_api_key()
+        if api_key:
+            logger.info("Using API key for engine (no auto-refresh)")
+            return (api_key, None)
+
+        logger.warning("No authentication available for engine")
+        return (None, None)
 
     def clear_all_auth(self) -> bool:
         """

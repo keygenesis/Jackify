@@ -596,19 +596,29 @@ class ProtontricksHandler:
                 try:
                     if user_reg_path.exists():
                         content = user_reg_path.read_text(encoding='utf-8', errors='ignore')
-                        if "ShowDotFiles" not in content:
+                        # Check for CORRECT format with proper backslash escaping
+                        has_correct_format = '[Software\\\\Wine]' in content and '"ShowDotFiles"="Y"' in content
+                        has_broken_format = '[SoftwareWine]' in content and '"ShowDotFiles"="Y"' in content
+
+                        if has_broken_format and not has_correct_format:
+                            # Fix the broken format by replacing the section header
+                            logger.debug(f"Found broken ShowDotFiles format in {user_reg_path}, fixing...")
+                            content = content.replace('[SoftwareWine]', '[Software\\\\Wine]')
+                            user_reg_path.write_text(content, encoding='utf-8')
+                            dotfiles_set_success = True
+                        elif not has_correct_format:
                             logger.debug(f"Adding ShowDotFiles entry to {user_reg_path}")
                             with open(user_reg_path, 'a', encoding='utf-8') as f:
-                                f.write('\n[Software\\Wine] 1603891765\n')
+                                f.write('\n[Software\\\\Wine] 1603891765\n')
                                 f.write('"ShowDotFiles"="Y"\n')
                             dotfiles_set_success = True # Count file write as success too
                         else:
-                             logger.debug("ShowDotFiles already present in user.reg")
+                             logger.debug("ShowDotFiles already present in correct format in user.reg")
                              dotfiles_set_success = True # Already there counts as success
                     else:
                         logger.warning(f"user.reg not found at {user_reg_path}, creating it.")
                         with open(user_reg_path, 'w', encoding='utf-8') as f:
-                             f.write('[Software\\Wine] 1603891765\n')
+                             f.write('[Software\\\\Wine] 1603891765\n')
                              f.write('"ShowDotFiles"="Y"\n')
                         dotfiles_set_success = True # Creating file counts as success
                 except Exception as e:

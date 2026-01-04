@@ -639,6 +639,8 @@ class ConfigureExistingModlistScreen(QWidget):
             # Start time tracking
             self._workflow_start_time = time.time()
 
+            from jackify import __version__ as jackify_version
+            self._safe_append_text(f"Jackify v{jackify_version}")
             self._safe_append_text("[Jackify] Starting post-install configuration...")
             
             # Create configuration thread using backend service

@@ -1,5 +1,26 @@
 # Jackify Changelog
 
+## v0.2.0.10 - Registry & Hashing Fixes
+**Release Date:** 2025-01-04
+
+### Engine Updates
+- **jackify-engine 0.4.5**: Fixed archive extraction with backslashes (including pattern matching), data directory path configuration, and removed post-download .wabbajack hash validation. Engine now auto-refreshes OAuth tokens during long installations via `NEXUS_OAUTH_INFO` environment variable.
+
+### Critical Bug Fixes
+- **InstallationThread Crash**: Fixed crash during installation with error "'InstallationThread' object has no attribute 'auth_service'". Premium detection diagnostics code assumed auth_service existed but it was never passed to the thread. Affects all users when Premium detection (including false positives) is triggered.
+- **Install Start Hang**: Fixed missing `oauth_info` parameter that prevented modlist installs from starting (hung at "Starting modlist installation...")
+- **OAuth Token Auto-Refresh**: Fixed OAuth tokens expiring during long modlist installations. Jackify now refreshes tokens with 15-minute buffer before passing to engine. Engine receives full OAuth state via `NEXUS_OAUTH_INFO` environment variable, enabling automatic token refresh during multi-hour downloads. Fixes "Token has expired" errors that occurred 60 minutes into installations.
+- **ShowDotFiles Registry Format**: Fixed Wine registry format bug causing hidden files to remain hidden in prefixes. Python string escaping issue wrote single backslash instead of double backslash in `[Software\\Wine]` section header. Added auto-detection and fix for broken format from curated registry files.
+- **Dotnet4 Registry Fixes**: Confirmed universal dotnet4.x registry fixes (`*mscoree=native` and `OnlyUseLatestCLR=1`) are applied in all three workflows (Install, Configure New, Configure Existing) across both CLI and GUI interfaces
+- **Proton Path Configuration**: Fixed `proton_path` writing invalid "auto" string to config.json - now uses `null` instead, preventing jackify-engine from receiving invalid paths
+
+### Improvements
+- **Wine Binary Detection**: Enhanced detection with recursive fallback search within Proton directory when expected paths don't exist (handles different Proton version structures)
+- Added Jackify version logging at workflow start
+- Fixed GUI log file rotation to only run in debug mode
+
+---
+
 ## v0.2.0.9 - Critical Configuration Fixes
 **Release Date:** 2025-12-31
 

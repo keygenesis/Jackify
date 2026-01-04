@@ -58,6 +58,8 @@ class ConfigHandler:
             "use_winetricks_for_components": True,  # DEPRECATED: Migrated to component_installation_method. Kept for backward compatibility.
             "component_installation_method": "winetricks",  # "winetricks" (default) or "system_protontricks"
             "game_proton_path": None,  # Proton version for game shortcuts (can be any Proton 9+), separate from install proton
+            "proton_path": None,  # Install Proton path (for jackify-engine) - None means auto-detect
+            "proton_version": None,  # Install Proton version name - None means auto-detect
             "steam_restart_strategy": "jackify",  # "jackify" (default) or "nak_simple"
             "window_width": None,  # Saved window width (None = use dynamic sizing)
             "window_height": None  # Saved window height (None = use dynamic sizing)
@@ -757,16 +759,20 @@ class ConfigHandler:
         Always reads fresh from disk.
 
         Returns:
-            str: Saved Install Proton path or 'auto' if not saved
+            str: Saved Install Proton path, or None if not set (indicates auto-detect mode)
         """
         try:
             config = self._read_config_from_disk()
-            proton_path = config.get("proton_path", "auto")
+            proton_path = config.get("proton_path")
+            # Return None if missing/None/empty string - don't default to "auto"
+            if not proton_path:
+                logger.debug("proton_path not set in config - will use auto-detection")
+                return None
             logger.debug(f"Retrieved fresh install proton_path from config: {proton_path}")
             return proton_path
         except Exception as e:
             logger.error(f"Error retrieving install proton_path: {e}")
-            return "auto"
+            return None
 
     def get_game_proton_path(self):
         """
@@ -775,7 +781,7 @@ class ConfigHandler:
         Always reads fresh from disk.
 
         Returns:
-            str: Saved Game Proton path, Install Proton path, or 'auto' if not saved
+            str: Saved Game Proton path, Install Proton path, or None if not saved (indicates auto-detect mode)
         """
         try:
             config = self._read_config_from_disk()
@@ -783,8 +789,12 @@ class ConfigHandler:
 
             # If game proton not set or set to same_as_install, use install proton
             if not game_proton_path or game_proton_path == "same_as_install":
-                game_proton_path = config.get("proton_path", "auto")
+                game_proton_path = config.get("proton_path")  # Returns None if not set
 
+            # Return None if missing/None/empty string
+            if not game_proton_path:
+                logger.debug("game_proton_path not set in config - will use auto-detection")
+                return None
             logger.debug(f"Retrieved fresh game proton_path from config: {game_proton_path}")
             return game_proton_path
         except Exception as e:
@@ -821,15 +831,20 @@ class ConfigHandler:
                 logger.info(f"Auto-detected Proton: {best_proton['name']} ({proton_type})")
                 self.save_config()
             else:
-                # Fallback to auto-detect mode
-                self.settings["proton_path"] = "auto"
-                self.settings["proton_version"] = "auto"
-                logger.info("No compatible Proton versions found, using auto-detect mode")
+                # Set proton_path to None (will appear as null in JSON) so jackify-engine doesn't get invalid path
+                # Code will auto-detect on each run when proton_path is None
+                self.settings["proton_path"] = None
+                self.settings["proton_version"] = None
+                logger.warning("No compatible Proton versions found - proton_path set to null in config.json")
+                logger.info("Jackify will auto-detect Proton on each run until a valid version is found")
                 self.save_config()
 
         except Exception as e:
             logger.error(f"Failed to auto-detect Proton: {e}")
-            self.settings["proton_path"] = "auto"
-            self.settings["proton_version"] = "auto"
+            # Set proton_path to None (will appear as null in JSON)
+            self.settings["proton_path"] = None
+            self.settings["proton_version"] = None
+            logger.warning("proton_path set to null in config.json due to auto-detection failure")
+            self.save_config()
 
  

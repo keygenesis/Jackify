@@ -1869,7 +1869,7 @@ class InstallModlistScreen(QWidget):
             downloads_dir = self.downloads_dir_edit.text().strip()
 
             # Get authentication token (OAuth or API key) with automatic refresh
-            api_key = self.auth_service.ensure_valid_auth()
+            api_key, oauth_info = self.auth_service.get_auth_for_engine()
             if not api_key:
                 self._abort_with_message(
                     "warning",
@@ -2097,7 +2097,7 @@ class InstallModlistScreen(QWidget):
                     return
             
             debug_print(f'DEBUG: Calling run_modlist_installer with modlist={modlist}, install_dir={install_dir}, downloads_dir={downloads_dir}, install_mode={install_mode}')
-            self.run_modlist_installer(modlist, install_dir, downloads_dir, api_key, install_mode)
+            self.run_modlist_installer(modlist, install_dir, downloads_dir, api_key, install_mode, oauth_info)
         except Exception as e:
             debug_print(f"DEBUG: Exception in validate_and_start_install: {e}")
             import traceback
@@ -2108,7 +2108,7 @@ class InstallModlistScreen(QWidget):
             self.cancel_install_btn.setVisible(False)
             debug_print(f"DEBUG: Controls re-enabled in exception handler")
 
-    def run_modlist_installer(self, modlist, install_dir, downloads_dir, api_key, install_mode='online'):
+    def run_modlist_installer(self, modlist, install_dir, downloads_dir, api_key, install_mode='online', oauth_info=None):
         debug_print('DEBUG: run_modlist_installer called - USING THREADED BACKEND WRAPPER')
         
         # Rotate log file at start of each workflow run (keep 5 backups)
@@ -2119,6 +2119,8 @@ class InstallModlistScreen(QWidget):
         
         # Clear console for fresh installation output
         self.console.clear()
+        from jackify import __version__ as jackify_version
+        self._safe_append_text(f"Jackify v{jackify_version}")
         self._safe_append_text("Starting modlist installation with custom progress handling...")
         
         # Update UI state for installation
@@ -2136,7 +2138,7 @@ class InstallModlistScreen(QWidget):
             installation_finished = Signal(bool, str)
             premium_required_detected = Signal(str)
             
-            def __init__(self, modlist, install_dir, downloads_dir, api_key, modlist_name, install_mode='online', progress_state_manager=None):
+            def __init__(self, modlist, install_dir, downloads_dir, api_key, modlist_name, install_mode='online', progress_state_manager=None, auth_service=None, oauth_info=None):
                 super().__init__()
                 self.modlist = modlist
                 self.install_dir = install_dir
@@ -2148,6 +2150,8 @@ class InstallModlistScreen(QWidget):
                 self.process_manager = None
                 # R&D: Progress state manager for parsing
                 self.progress_state_manager = progress_state_manager
+                self.auth_service = auth_service
+                self.oauth_info = oauth_info
                 self._premium_signal_sent = False
                 # Rolling buffer for Premium detection diagnostics
                 self._engine_output_buffer = []
@@ -2196,7 +2200,10 @@ class InstallModlistScreen(QWidget):
 
                     # Use clean subprocess environment to prevent AppImage variable inheritance
                     from jackify.backend.handlers.subprocess_utils import get_clean_subprocess_env
-                    env = get_clean_subprocess_env({'NEXUS_API_KEY': self.api_key})
+                    env_vars = {'NEXUS_API_KEY': self.api_key}
+                    if self.oauth_info:
+                        env_vars['NEXUS_OAUTH_INFO'] = self.oauth_info
+                    env = get_clean_subprocess_env(env_vars)
                     self.process_manager = ProcessManager(cmd, env=env, text=False)
                     ansi_escape = re.compile(rb'\x1b\[[0-9;?]*[ -/]*[@-~]')
                     buffer = b''
@@ -2451,7 +2458,9 @@ class InstallModlistScreen(QWidget):
         # After the InstallationThread class definition, add:
         self.install_thread = InstallationThread(
             modlist, install_dir, downloads_dir, api_key, self.modlist_name_edit.text().strip(), install_mode,
-            progress_state_manager=self.progress_state_manager  # R&D: Pass progress state manager
+            progress_state_manager=self.progress_state_manager,  # R&D: Pass progress state manager
+            auth_service=self.auth_service,  # Fix Issue #127: Pass auth_service for Premium detection diagnostics
+            oauth_info=oauth_info  # Pass OAuth state for auto-refresh
         )
         self.install_thread.output_received.connect(self.on_installation_output)
         self.install_thread.progress_received.connect(self.on_installation_progress)

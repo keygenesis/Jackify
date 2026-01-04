@@ -276,7 +276,8 @@ class ModlistService:
             download_dir_str = str(actual_download_path)
             
             api_key = context['nexus_api_key']
-            
+            oauth_info = context.get('nexus_oauth_info')
+
             # Path to the engine binary (copied from working code)
             engine_path = get_jackify_engine_path()
             engine_dir = os.path.dirname(engine_path)
@@ -302,16 +303,26 @@ class ModlistService:
             # Store original environment values (copied from working code)
             original_env_values = {
                 'NEXUS_API_KEY': os.environ.get('NEXUS_API_KEY'),
+                'NEXUS_OAUTH_INFO': os.environ.get('NEXUS_OAUTH_INFO'),
                 'DOTNET_SYSTEM_GLOBALIZATION_INVARIANT': os.environ.get('DOTNET_SYSTEM_GLOBALIZATION_INVARIANT')
             }
-            
+
             try:
-                # Environment setup (copied from working code)
-                if api_key:
+                # Environment setup - prefer NEXUS_OAUTH_INFO (supports auto-refresh) over NEXUS_API_KEY
+                if oauth_info:
+                    os.environ['NEXUS_OAUTH_INFO'] = oauth_info
+                    # Also set NEXUS_API_KEY for backward compatibility
+                    if api_key:
+                        os.environ['NEXUS_API_KEY'] = api_key
+                elif api_key:
                     os.environ['NEXUS_API_KEY'] = api_key
-                elif 'NEXUS_API_KEY' in os.environ:
-                    del os.environ['NEXUS_API_KEY']
-                    
+                else:
+                    # No auth available, clear any inherited values
+                    if 'NEXUS_API_KEY' in os.environ:
+                        del os.environ['NEXUS_API_KEY']
+                    if 'NEXUS_OAUTH_INFO' in os.environ:
+                        del os.environ['NEXUS_OAUTH_INFO']
+
                 os.environ['DOTNET_SYSTEM_GLOBALIZATION_INVARIANT'] = "1"
                 
                 pretty_cmd = ' '.join([f'"{arg}"' if ' ' in arg else arg for arg in cmd])

@@ -1891,8 +1891,9 @@ def main():
     # Initialize file logging on root logger so all modules inherit it
     from jackify.shared.logging import LoggingHandler
     logging_handler = LoggingHandler()
-    # Rotate log file before setting up new logger
-    logging_handler.rotate_log_for_logger('jackify_gui', 'jackify-gui.log')
+    # Only rotate log file when debug mode is enabled
+    if debug_mode:
+        logging_handler.rotate_log_for_logger('jackify_gui', 'jackify-gui.log')
     root_logger = logging_handler.setup_logger('', 'jackify-gui.log', is_general=True)  # Empty name = root logger
 
     if debug_mode:

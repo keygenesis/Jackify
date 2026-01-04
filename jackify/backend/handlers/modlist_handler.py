@@ -105,9 +105,9 @@ class ModlistHandler:
             verbose: Boolean indicating if verbose output is desired.
             filesystem_handler: Optional FileSystemHandler instance to use instead of creating a new one.
         """
-        # Use standard logging (no file handler)
+        # Use standard logging (propagate to root logger so messages appear in logs)
         self.logger = logging.getLogger(__name__)
-        self.logger.propagate = False
+        self.logger.propagate = True
         self.steamdeck = steamdeck
 
         # DEBUG: Log ModlistHandler instantiation details for SD card path debugging
@@ -746,15 +746,20 @@ class ModlistHandler:
         try:
             registry_success = self._apply_universal_dotnet_fixes()
         except Exception as e:
-            self.logger.error(f"CRITICAL: Registry fixes failed - modlist may have .NET compatibility issues: {e}")
+            error_msg = f"CRITICAL: Registry fixes failed - modlist may have .NET compatibility issues: {e}"
+            self.logger.error(error_msg)
+            if status_callback:
+                status_callback(f"{self._get_progress_timestamp()} ERROR: {error_msg}")
             registry_success = False
 
         if not registry_success:
+            failure_msg = "WARNING: Universal dotnet4.x registry fixes FAILED! This modlist may experience .NET Framework compatibility issues."
             self.logger.error("=" * 80)
-            self.logger.error("WARNING: Universal dotnet4.x registry fixes FAILED!")
-            self.logger.error("This modlist may experience .NET Framework compatibility issues.")
+            self.logger.error(failure_msg)
             self.logger.error("Consider manually setting mscoree=native in winecfg if problems occur.")
             self.logger.error("=" * 80)
+            if status_callback:
+                status_callback(f"{self._get_progress_timestamp()} {failure_msg}")
             # Continue but user should be aware of potential issues
 
         # Step 4.6: Enable dotfiles visibility for Wine prefix
@@ -1596,20 +1601,21 @@ class ModlistHandler:
                 except Exception as e:
                     self.logger.warning(f"Wineserver shutdown failed (non-critical): {e}")
 
-            # Registry fix 1: Set mscoree=native DLL override
+            # Registry fix 1: Set *mscoree=native DLL override (asterisk for full override)
             # This tells Wine to use native .NET runtime instead of Wine's implementation
-            self.logger.debug("Setting mscoree=native DLL override...")
+            self.logger.debug("Setting *mscoree=native DLL override...")
             cmd1 = [
                 wine_binary, 'reg', 'add',
                 'HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides',
-                '/v', 'mscoree', '/t', 'REG_SZ', '/d', 'native', '/f'
+                '/v', '*mscoree', '/t', 'REG_SZ', '/d', 'native', '/f'
             ]
 
             result1 = subprocess.run(cmd1, env=env, capture_output=True, text=True, errors='replace', timeout=30)
+            self.logger.info(f"*mscoree registry command result: returncode={result1.returncode}, stdout={result1.stdout[:200]}, stderr={result1.stderr[:200]}")
             if result1.returncode == 0:
-                self.logger.info("Successfully applied mscoree=native DLL override")
+                self.logger.info("Successfully applied *mscoree=native DLL override")
             else:
-                self.logger.warning(f"Failed to set mscoree DLL override: {result1.stderr}")
+                self.logger.error(f"Failed to set *mscoree DLL override: returncode={result1.returncode}, stderr={result1.stderr}")
 
             # Registry fix 2: Set OnlyUseLatestCLR=1
             # This prevents .NET version conflicts by using the latest CLR
@@ -1621,10 +1627,11 @@ class ModlistHandler:
             ]
 
             result2 = subprocess.run(cmd2, env=env, capture_output=True, text=True, errors='replace', timeout=30)
+            self.logger.info(f"OnlyUseLatestCLR registry command result: returncode={result2.returncode}, stdout={result2.stdout[:200]}, stderr={result2.stderr[:200]}")
             if result2.returncode == 0:
                 self.logger.info("Successfully applied OnlyUseLatestCLR=1 registry entry")
             else:
-                self.logger.warning(f"Failed to set OnlyUseLatestCLR: {result2.stderr}")
+                self.logger.error(f"Failed to set OnlyUseLatestCLR: returncode={result2.returncode}, stderr={result2.stderr}")
 
             # Force wineserver to flush registry changes to disk
             if wineserver_binary:
@@ -1639,17 +1646,17 @@ class ModlistHandler:
             self.logger.info("Verifying registry entries were applied and persisted...")
             verification_passed = True
 
-            # Verify mscoree=native
+            # Verify *mscoree=native
             verify_cmd1 = [
                 wine_binary, 'reg', 'query',
                 'HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides',
-                '/v', 'mscoree'
+                '/v', '*mscoree'
             ]
             verify_result1 = subprocess.run(verify_cmd1, env=env, capture_output=True, text=True, errors='replace', timeout=30)
             if verify_result1.returncode == 0 and 'native' in verify_result1.stdout:
-                self.logger.info("VERIFIED: mscoree=native is set correctly")
+                self.logger.info("VERIFIED: *mscoree=native is set correctly")
             else:
-                self.logger.error(f"VERIFICATION FAILED: mscoree=native not found in registry. Query output: {verify_result1.stdout}")
+                self.logger.error(f"VERIFICATION FAILED: *mscoree=native not found in registry. Query output: {verify_result1.stdout}")
                 verification_passed = False
 
             # Verify OnlyUseLatestCLR=1
@@ -1696,9 +1703,16 @@ class ModlistHandler:
                 ]
 
                 for wine_path in wine_candidates:
-                    if wine_path.exists():
+                    if wine_path.exists() and wine_path.is_file():
                         self.logger.info(f"Using Wine binary from user's configured Proton: {wine_path}")
                         return str(wine_path)
+
+                # Wine binary not found at expected paths - search recursively in Proton directory
+                self.logger.debug(f"Wine binary not found at expected paths in {proton_path}, searching recursively...")
+                wine_binary = self._search_wine_in_proton_directory(proton_path)
+                if wine_binary:
+                    self.logger.info(f"Found Wine binary via recursive search in Proton directory: {wine_binary}")
+                    return wine_binary
 
                 self.logger.warning(f"User's configured Proton path has no wine binary: {user_proton_path}")
 
@@ -1717,6 +1731,44 @@ class ModlistHandler:
 
         except Exception as e:
             self.logger.error(f"Error finding Wine binary: {e}")
+            return None
+
+    def _search_wine_in_proton_directory(self, proton_path: Path) -> Optional[str]:
+        """
+        Recursively search for wine binary within a Proton directory.
+        This handles cases where the directory structure might differ between Proton versions.
+        
+        Args:
+            proton_path: Path to the Proton directory to search
+            
+        Returns:
+            Path to wine binary if found, None otherwise
+        """
+        try:
+            if not proton_path.exists() or not proton_path.is_dir():
+                return None
+
+            # Search for 'wine' executable (not 'wine64' or 'wine-preloader')
+            # Limit search depth to avoid scanning entire filesystem
+            max_depth = 5
+            for root, dirs, files in os.walk(proton_path, followlinks=False):
+                # Calculate depth relative to proton_path
+                depth = len(Path(root).relative_to(proton_path).parts)
+                if depth > max_depth:
+                    dirs.clear()  # Don't descend further
+                    continue
+                
+                # Check if 'wine' is in this directory
+                if 'wine' in files:
+                    wine_path = Path(root) / 'wine'
+                    # Verify it's actually an executable file
+                    if wine_path.is_file() and os.access(wine_path, os.X_OK):
+                        self.logger.debug(f"Found wine binary at: {wine_path}")
+                        return str(wine_path)
+
+            return None
+        except Exception as e:
+            self.logger.debug(f"Error during recursive wine search in {proton_path}: {e}")
             return None
 
  

@@ -919,8 +919,10 @@ class ConfigureNewModlistScreen(QWidget):
         self._enable_controls_after_operation()
         if success:
             self._safe_append_text("Steam restarted successfully.")
-            
+
             # Start configuration immediately - the CLI will handle any manual steps
+            from jackify import __version__ as jackify_version
+            self._safe_append_text(f"Jackify v{jackify_version}")
             self._safe_append_text("Starting modlist configuration...")
             self.configure_modlist()
         else:
@@ -950,6 +952,8 @@ class ConfigureNewModlistScreen(QWidget):
 
     def _start_automated_prefix_workflow(self, modlist_name, install_dir, mo2_exe_path, resolution):
         """Start the automated prefix workflow using AutomatedPrefixService in a background thread"""
+        from jackify import __version__ as jackify_version
+        self._safe_append_text(f"Jackify v{jackify_version}")
         self._safe_append_text(f"Initializing automated Steam setup for '{modlist_name}'...")
         self._safe_append_text("Starting automated Steam shortcut creation and configuration...")
         
