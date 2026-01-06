@@ -89,6 +89,22 @@ Currently, there are two main functions that Jackify will perform at this stage 
 chmod +x Jackify.AppImage
 ./Jackify.AppImage
 ```
+#### NixOS
+
+```bash
+# Add Jackify as a flake input
+# (flake.nix)
+jackify = {
+  url = "github:Omni-guides/Jackify";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+
+# Add Jackify to Home Manager
+# (home.nix)
+home.packages = [
+  inputs.jackify.packages.${pkgs.system}.default
+];
+```
 
 ## Usage
 
