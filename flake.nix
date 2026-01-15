@@ -10,7 +10,7 @@
       lib = pkgs.lib;
 
       # This version and hash must be updated for each new release
-      version = "0.2.0.10";
+      version = "0.2.1";
 
       # AppImage asset name as published upstream
       appImageName = "Jackify.AppImage";
