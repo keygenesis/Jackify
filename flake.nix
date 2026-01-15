@@ -18,7 +18,7 @@
       appImage = pkgs.fetchurl {
         url = "https://github.com/Omni-guides/Jackify/releases/download/v${version}/${appImageName}";
         # Must be updated when the AppImage changes
-        hash = "sha256-0pbigw3l0r0jh7ixkv01m9hjh0bnzh0zpc660qh1a3ccqnghl8zn";
+        hash = "sha256-9iMKn8WMDRUgBsaw+wH8dgEoYaoB7NnjgRJkQAd/cV0=";
       };
 
       # Ensure flake source is a store path for install commands
