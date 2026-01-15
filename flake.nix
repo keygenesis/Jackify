@@ -61,26 +61,6 @@
           fuse3
         ];
 
-        extraInstallCommands = ''
-          # Icon from repo assets/
-          install -Dm644 ${srcTree}/assets/JackifyLogo_256.png \
-              $out/share/icons/hicolor/256x256/apps/jackify.png
-            
-          # Desktop entry
-          install -Dm644 ${pkgs.writeText "jackify.desktop" ''
-            [Desktop Entry]
-            Type=Application
-            Name=Jackify
-            Comment=Installation and configuration tool for Wabbajack modlists
-            Exec=jackify %U
-            Icon=jackify
-            Terminal=false
-            Categories=Game;Utility;
-            Keywords=Wabbajack;Modlist;Mods;Proton;MO2;
-          ''} \
-            $out/share/applications/jackify.desktop
-        '';
-
         meta = with lib; {
           description = "A modlist installation and configuration tool for Wabbajack modlists on Linux";
           homepage = "https://github.com/Omni-guides/Jackify";
