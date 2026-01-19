@@ -62,15 +62,24 @@
         ];
 
         extraInstallCommands = ''
-        # Remove the AppImage-provided desktop file (it points at extracted __main__.py)
-        rm -f $out/share/applications/com.jackify.app.desktop
-  
-        # Ensure the remaining desktop entry launches the wrapped binary
-        if [ -f $out/share/applications/jackify.desktop ]; then
-          sed -i "s|^Exec=.*|Exec=$out/bin/jackify %U|g" \
-            $out/share/applications/jackify.desktop
-        fi
-      '';
+          mkdir -p $out/share/applications
+
+          # remove AppImage .desktop
+          rm -f $out/share/applications/com.jackify.app.desktop
+          rm -f $out/share/applications/*.desktop~
+
+          # create new .desktop
+          cat > $out/share/applications/jackify.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=Jackify
+Exec=$out/bin/jackify %U
+Icon=com.jackify.app
+Categories=Utility;
+Terminal=false
+StartupNotify=true
+EOF
+          '';
 
         meta = with lib; {
           description = "A modlist installation and configuration tool for Wabbajack modlists on Linux";
