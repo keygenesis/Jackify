@@ -10,7 +10,7 @@
       lib = pkgs.lib;
 
       # This version and hash must be updated for each new release
-      version = "0.2.1";
+      version = "0.2.1.1";
 
       # AppImage asset name as published upstream
       appImageName = "Jackify.AppImage";
@@ -18,7 +18,7 @@
       appImage = pkgs.fetchurl {
         url = "https://github.com/Omni-guides/Jackify/releases/download/v${version}/${appImageName}";
         # Must be updated when the AppImage changes
-        hash = "sha256-9iMKn8WMDRUgBsaw+wH8dgEoYaoB7NnjgRJkQAd/cV0=";
+        hash = "sha256-zVreomYaYfOU6pEUlZz+rVMjeuTZBKzylUMF1ComEdQ=";
       };
 
       # Ensure flake source is a store path for install commands
