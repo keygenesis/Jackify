@@ -1,8 +1,30 @@
 # Jackify Changelog
 
+## v0.2.1.1 - Bug Fixes and Improvements
+**Release Date:** 2026-01-15
+
+### Critical Bug Fixes
+- **AppImage Crash on Steam Deck**: Fixed `NameError: name 'Tuple' is not defined` that prevented AppImage from launching on Steam Deck. Added missing `Tuple` import to `progress_models.py`
+
+### Bug Fixes
+- **Menu Routing**: Fixed "Configure Existing Modlist (In Steam)" opening wrong section (was routing to Wabbajack Installer instead of Configure Existing screen)
+- **TTW Install Dialogue**: Fixed incorrect account reference (changed "mod.db" to "ModPub" to match actual download source)
+- **Duplicate Method**: Removed duplicate `_handle_missing_downloader_error` method in winetricks handler
+- **Issue #142**: Removed sudo execution from modlist configuration - now auto-fixes permissions when possible, provides manual instructions only when sudo required
+- **Issue #133**: Updated VDF library to 4.0 for improved Steam file format compatibility (protontricks 1.13.1+ support)
+
+### Features
+- **Wine Component Error Handling**: Enhanced error messages for missing downloaders with platform-specific installation instructions (SteamOS/Steam Deck vs other distros)
+
+### Dependencies
+- **VDF Library**: Updated from PyPI vdf 3.4 to actively maintained solsticegamestudios/vdf 4.0 (used by Gentoo)
+- **Winetricks**: Removed bundled downloaders that caused segfaults on some systems - now uses system-provided downloaders (aria2c/wget/curl)
+
+---
+
 ## v0.2.1 - Wabbajack Installer and ENB Support
 **Release Date:** 2025-01-12
-
+Y
 ### Major Features
 - **Automated Wabbajack Installation**: While I work on Non-Premium support, there is still a call for Wabbajack via Proton. The existing legacy bash script has been proving troublesome for some users, so I've added this as a new feature within Jackify. My aim is still to not need this in future, once Jackify can cover Non-Premium accounts.
 - **ENB Detection and Configuration**: Automatic detection and configuration of `enblocal.ini` with `LinuxVersion=true` for all supported games
