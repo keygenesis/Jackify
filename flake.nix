@@ -62,7 +62,13 @@
         ];
 
         extraInstallCommands = ''
-          mkdir -p $out/share/applications
+          mkdir -p \
+            $out/share/applications \
+            $out/share/icons/hicolor/256x256/apps
+
+          # install icon
+          cp ${srcTree}/assets/JackifyLogo_256.png \
+          $out/share/icons/hicolor/256x256/apps/jackify.png
 
           # remove AppImage .desktop
           rm -f $out/share/applications/com.jackify.app.desktop
@@ -73,6 +79,7 @@
 [Desktop Entry]
 Type=Application
 Name=Jackify
+Comment=Installation and configuration tool for Wabbajack modlists
 Exec=$out/bin/jackify %U
 Icon=com.jackify.app
 Categories=Utility;
