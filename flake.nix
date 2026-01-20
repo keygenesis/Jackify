@@ -165,23 +165,30 @@ EOF
           mainProgram = "jackify";
         };
       };
-    in
-    {
-      packages.${system}.jackify = jackify;
-      packages.${system}.default = jackify;
+    in {
+  packages = {
+    ${system} = {
+      jackify = jackify;
+      default = jackify;
+    };
+  };
 
-      apps.${system}.default = {
+  apps = {
+    ${system} = {
+      default = {
         type = "app";
         program = "${jackify}/bin/jackify";
       };
-
-      overlays.default = final: prev: {
-        jackify = jackify;
-      };
-
-      nixosModules.default = { pkgs, ... }: {
-        nixpkgs.overlays = [ self.overlays.default ];
-        environment.systemPackages = [ pkgs.jackify ];
-      };
     };
+  };
+
+  overlays.default = final: prev: {
+    jackify = jackify;
+  };
+
+  nixosModules.default = { pkgs, ... }: {
+    nixpkgs.overlays = [ self.overlays.default ];
+    environment.systemPackages = [ pkgs.jackify ];
+  };
+}
 }
