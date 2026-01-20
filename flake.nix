@@ -81,13 +81,7 @@ set -euo pipefail
 export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
 export NIX_SSL_CERT_FILE="\$SSL_CERT_FILE"
 
-exec ${pkgs.steam-run}/bin/steam-run env \
-  SSL_CERT_FILE="\$SSL_CERT_FILE" \
-  NIX_SSL_CERT_FILE="\$NIX_SSL_CERT_FILE" \
-  HOME="\$HOME" USER="\$USER" LOGNAME="\$LOGNAME" \
-  DISPLAY="''${DISPLAY:-}" WAYLAND_DISPLAY="''${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-}" \
-  PATH="\$PATH" \
-  "$out/bin/jackify-real" "\$@"
+exec ${pkgs.steam-run}/bin/steam-run "$out/bin/jackify-real" "\$@"
 EOF
 
           chmod +x $out/bin/jackify
@@ -97,7 +91,7 @@ EOF
 Type=Application
 Name=Jackify
 Comment=Installation and configuration tool for Wabbajack modlists
-Exec=$out/bin/jackify %U
+Exec=$out/bin/jackify %u
 Icon=jackify
 Categories=Utility;
 Terminal=false
