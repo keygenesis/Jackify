@@ -12,19 +12,14 @@
       };
       lib = pkgs.lib;
 
-      # This version and hash must be updated for each new release
       version = "0.2.1.1";
-
-      # AppImage asset name as published upstream
       appImageName = "Jackify.AppImage";
 
       appImage = pkgs.fetchurl {
         url = "https://github.com/Omni-guides/Jackify/releases/download/v${version}/${appImageName}";
-        # Must be updated when the AppImage changes
         hash = "sha256-zVreomYaYfOU6pEUlZz+rVMjeuTZBKzylUMF1ComEdQ=";
       };
 
-      # Ensure flake source is a store path for install commands
       srcTree = builtins.path { path = self; name = "jackify-src"; };
 
       jackify = pkgs.appimageTools.wrapType2 {
@@ -45,6 +40,8 @@
           ]))
 
           steam-run
+          cacert
+
           libGL
           xcb-util-cursor
           zstd
@@ -70,27 +67,44 @@
             $out/share/applications \
             $out/share/icons/hicolor/256x256/apps
 
-          # install icon
           cp ${srcTree}/assets/JackifyLogo_256.png \
-          $out/share/icons/hicolor/256x256/apps/jackify.png
+            $out/share/icons/hicolor/256x256/apps/jackify.png
 
-          # remove AppImage .desktop
           find $out/share/applications -maxdepth 1 -name "*.desktop" -delete
 
-          # create new .desktop
+          mv $out/bin/jackify $out/bin/jackify-real
+
+          cat > $out/bin/jackify <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+export NIX_SSL_CERT_FILE="\$SSL_CERT_FILE"
+
+exec ${pkgs.steam-run}/bin/steam-run env \
+  SSL_CERT_FILE="\$SSL_CERT_FILE" \
+  NIX_SSL_CERT_FILE="\$NIX_SSL_CERT_FILE" \
+  HOME="\$HOME" USER="\$USER" LOGNAME="\$LOGNAME" \
+  DISPLAY="\${DISPLAY:-}" WAYLAND_DISPLAY="\${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-}" \
+  PATH="\$PATH" \
+  "$out/bin/jackify-real" "\$@"
+EOF
+
+          chmod +x $out/bin/jackify
+
           cat > $out/share/applications/jackify.desktop <<EOF
 [Desktop Entry]
 Type=Application
 Name=Jackify
 Comment=Installation and configuration tool for Wabbajack modlists
-Exec=${pkgs.steam-run}/bin/steam-run $out/bin/jackify %U
+Exec=$out/bin/jackify %U
 Icon=jackify
 Categories=Utility;
 Terminal=false
 StartupNotify=true
 MimeType=x-scheme-handler/jackify;
 EOF
-          '';
+        '';
 
         meta = with lib; {
           description = "A modlist installation and configuration tool for Wabbajack modlists on Linux";
@@ -100,23 +114,23 @@ EOF
         };
       };
     in {
-        packages.${system} = {
-          jackify = jackify;
-          default = jackify;
-        };
-  
-        apps.${system}.default = {
-          type = "app";
-          program = "${jackify}/bin/jackify";
-        };
-  
-        overlays.default = final: prev: {
-          jackify = jackify;
-        };
-
-        nixosModules.default = { pkgs, ... }: {
-          nixpkgs.overlays = [ self.overlays.default ];
-          environment.systemPackages = [ pkgs.jackify ];
-        };
+      packages.${system} = {
+        jackify = jackify;
+        default = jackify;
       };
+
+      apps.${system}.default = {
+        type = "app";
+        program = "${jackify}/bin/jackify";
+      };
+
+      overlays.default = final: prev: {
+        jackify = jackify;
+      };
+
+      nixosModules.default = { pkgs, ... }: {
+        nixpkgs.overlays = [ self.overlays.default ];
+        environment.systemPackages = [ pkgs.jackify ];
+      };
+    };
 }
