@@ -42,7 +42,7 @@
           steam-run
           cacert
 
-          aria2c
+          aria2
           libGL
           xcb-util-cursor
           zstd
