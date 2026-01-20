@@ -40,7 +40,8 @@
             vdf
             packaging
           ]))
-          
+
+          steam-run
           libGL
           xcb-util-cursor
           zstd
@@ -81,11 +82,12 @@
 Type=Application
 Name=Jackify
 Comment=Installation and configuration tool for Wabbajack modlists
-Exec=$out/bin/jackify %U
+Exec=${pkgs.steam-run}/bin/steam-run $out/bin/jackify %U
 Icon=jackify
 Categories=Utility;
 Terminal=false
 StartupNotify=true
+MimeType=x-scheme-handler/jackify;
 EOF
           '';
 
