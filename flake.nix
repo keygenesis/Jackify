@@ -190,4 +190,5 @@ EOF
     nixpkgs.overlays = [ self.overlays.default ];
     environment.systemPackages = [ pkgs.jackify ];
   };
+};
 }
