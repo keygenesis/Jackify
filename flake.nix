@@ -85,7 +85,7 @@ exec ${pkgs.steam-run}/bin/steam-run env \
   SSL_CERT_FILE="\$SSL_CERT_FILE" \
   NIX_SSL_CERT_FILE="\$NIX_SSL_CERT_FILE" \
   HOME="\$HOME" USER="\$USER" LOGNAME="\$LOGNAME" \
-  DISPLAY="\${DISPLAY:-}" WAYLAND_DISPLAY="\${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-}" \
+  DISPLAY="''${DISPLAY:-}" WAYLAND_DISPLAY="''${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-}" \
   PATH="\$PATH" \
   "$out/bin/jackify-real" "\$@"
 EOF
