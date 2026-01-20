@@ -191,4 +191,3 @@ EOF
     environment.systemPackages = [ pkgs.jackify ];
   };
 }
-}
