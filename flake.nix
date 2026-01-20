@@ -91,23 +91,27 @@
 set -eu
 
 steam_root="$HOME/.local/share/Steam"
-ctd="${steam_root}/compatibilitytools.d"
+ctd="$steam_root/compatibilitytools.d"
 
 pick=""
-if [ -x "${ctd}/Proton-GE Latest/files/bin/wine" ]; then
-  pick="${ctd}/Proton-GE Latest/files/bin/wine"
+if [ -x "$ctd/Proton-GE Latest/files/bin/wine" ]; then
+  pick="$ctd/Proton-GE Latest/files/bin/wine"
 else
-  pick="$(ls -1d "${ctd}"/GE-Proton* 2>/dev/null | sort -V | tail -n 1)/files/bin/wine" || true
+  latest="$(ls -1d "$ctd"/GE-Proton* 2>/dev/null | sort -V | tail -n 1 || true)"
+  if [ -n "$latest" ] && [ -x "$latest/files/bin/wine" ]; then
+    pick="$latest/files/bin/wine"
+  fi
 fi
 
-if [ -z "${pick}" ] || [ ! -x "${pick}" ]; then
-  echo "Jackify: GE-Proton wine not found in ${ctd}" >&2
+if [ -z "$pick" ] || [ ! -x "$pick" ]; then
+  echo "Jackify: GE-Proton wine not found in $ctd" >&2
   exit 1
 fi
 
-exec steam-run "${pick}" "$@"
+exec steam-run "$pick" "$@"
 EOF
-          chmod +x $out/bin/jackify-wine
+chmod +x $out/bin/jackify-wine
+
 
           cat > $out/bin/jackify <<EOF
 #!/usr/bin/env bash
