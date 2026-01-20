@@ -90,7 +90,7 @@
 #!/usr/bin/env sh
 set -eu
 
-steam_root="${HOME}/.local/share/Steam"
+steam_root="$HOME/.local/share/Steam"
 ctd="${steam_root}/compatibilitytools.d"
 
 pick=""
