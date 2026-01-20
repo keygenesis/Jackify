@@ -72,9 +72,7 @@
           $out/share/icons/hicolor/256x256/apps/jackify.png
 
           # remove AppImage .desktop
-          rm -f $out/share/applications/*.desktop \
-          $out/share/applications/*.desktop~ \
-          $out/share/applications/*~
+          find $out/share/applications -maxdepth 1 -name "*.desktop" -delete
 
           # create new .desktop
           cat > $out/share/applications/jackify.desktop <<EOF
