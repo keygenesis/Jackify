@@ -42,6 +42,7 @@
           steam-run
           cacert
 
+          aria2c
           libGL
           xcb-util-cursor
           zstd
@@ -79,7 +80,9 @@
 set -euo pipefail
 
 export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-export NIX_SSL_CERT_FILE="\$SSL_CERT_FILE"
+export NIX_SSL_CERT_FILE="$SSL_CERT_FILE"
+export CURL_CA_BUNDLE="$SSL_CERT_FILE"
+export REQUESTS_CA_BUNDLE="$SSL_CERT_FILE"
 
 exec ${pkgs.steam-run}/bin/steam-run "$out/bin/jackify-real" "\$@"
 EOF
