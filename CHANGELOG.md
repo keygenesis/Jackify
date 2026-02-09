@@ -1,5 +1,67 @@
 # Jackify Changelog
 
+## v0.3.0 - Codebase Refactoring
+**Release Date:** 2026-02-06
+
+### Technical Improvements
+- **Code Architecture**: Refactored 13 large files (1000-5000 lines each) into 50+ focused modules using mixin pattern. All main files now under 600 lines.
+
+### Bug Fixes
+- **Configure New Modlist GUI**: Fixed window not shrinking when Show Details unchecked
+- **CLI Wabbajack Installer**: Added missing installation command to CLI menu
+- **Wabbajack Installer**: Fixed installation to non-primary disk
+
+### Improvements
+- **Wabbajack Install - Honour Install Proton**: Wabbajack installer now uses the user's selected Install Proton from Settings (same as modlist install/configure). Previously hardcoded to Proton Experimental. Fallback to Proton Experimental when no selection or path invalid.
+- **STEAM_COMPAT_MOUNTS (Issue #155)**: Launch options now include mountpoints for both the modlist install path and the download path when known, so MO2 can access game and downloads on different drives. Uses new mountpoint helper and passes install_dir/download_dir through the Install a Modlist workflow.
+- **MO2 download_directory (Issue #154)**: When configuring after Install a Modlist, Jackify now sets `download_directory` in ModOrganizer.ini to the correct Wine path (Z: or D: on SD card) so MO2 finds the download folder. Configure New and Configure Existing continue to leave or blank the key as before.
+- **Winetricks / Protontricks**: For Flatpak Steam, use protontricks only. Winetricks alone struggles with the flatpak sandbox.
+- **Wine Component Animation**: Added pulser animation for individual wine component installation progress in Configure Existing and Install Modlist workflows
+- **Wabbajack Installer Log Rotation**: Added log rotation for Wabbajack installer workflow logs
+
+---
+
+## v0.2.2.2 - ModOrganizer.ini Path Fixes for SD Card Installations
+**Release Date:** 2026-01-28
+
+### Bug Fixes
+- **ModOrganizer.ini Path Mangling**: Fixed incorrect drive letter assignment when modlist is on SD card but vanilla game is on internal storage. Now uses gamePath drive letter as source of truth for vanilla game paths.
+- **Proton Config Name Mismatch (Issues #150, #151)**: Fixed incorrect Proton names written to Steam config.vdf CompatToolMapping. Naive string conversion produced wrong names (e.g., `proton_9.0_(beta)` instead of `proton_9`). Now resolves correct internal names from `compatibilitytool.vdf` (third-party) or App ID mapping (Valve Proton). CachyOS and other community Proton builds in `compatibilitytools.d/` are now detected and selectable.
+- **Removed Lorerim/Lost Legacy Proton Override**: No longer forces Proton 9 for specific modlists. ENB compatibility warnings are handled by the success dialog instead.
+
+### Engine Updates
+- **jackify-engine 0.4.7**: Fixed incorrect quoting/escaping of MO2 `customExecutables` by writing clean, unquoted Proton `Z:\...` paths in `ModOrganizer.ini`. This eliminates engine-side quote corruption that previously triggered SD card path mangling issues.
+
+### Improvements
+- **Improved Wine Component install debug log output**: Will now print the full command being used for winetricks and protontricks when debug mode is enabled, making it easier to reproduce issues manually.
+
+---
+
+## v0.2.2.1 - TTW Installer Pinning and Configure New Modlist CLI Fix
+**Release Date:** 2026-01-24
+
+### Bug Fixes
+- **Configure New Modlist CLI**: Fixed manual Proton setup prompts appearing in CLI. Now uses automated prefix workflow like the install command.
+- **TTW_Linux_Installer Version Pinning**: Pinned to v0.0.7. Will re-introduce latest version following more testing.
+
+---
+
+## v0.2.2 - VNV Automation and First-Launch Improvements
+**Release Date:** 2026-01-21
+
+### Major Features
+- **Viva New Vegas Post-Install Automation (experimental)**: Full automated workflow for the Viva New Vegas modlist. Handles root files copying, 4GB patcher, and BSA decompression as per the VNV install guide. This is an initial pass at automating this, so considered experimental.
+- **Game Directory Pre-Creation**: Automatically creates My Documents/My Games and AppData/Local directories for some. Prevents some first-launch failures where games can't initialize under Proton. Supports Skyrim SE, FNV, FO4, Oblivion, Oblivion Remastered, Enderal, and Starfield so far.
+
+### Bug Fixes
+- **Configure Existing Modlist**: Fixed AttributeError when VNV automation check runs after configuration completes
+- **Enderal Directory Creation**: Fixed bug where Enderal My Documents directory was created for all modlists instead of only Enderal
+
+### Improvements
+- **Winetricks Bundling**: Implemented Wine wrapper scripts that replicate protontricks' environment setup for improved reliability
+
+---
+
 ## v0.2.1.1 - Bug Fixes and Improvements
 **Release Date:** 2026-01-15
 

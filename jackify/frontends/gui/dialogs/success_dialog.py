@@ -40,6 +40,7 @@ class SuccessDialog(QDialog):
         self.setWindowTitle("Success!")
         self.setWindowModality(Qt.NonModal)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setFixedSize(500, 500)
         self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
         self.setStyleSheet("QDialog { background: #181818; color: #fff; border-radius: 12px; }" )
@@ -184,7 +185,7 @@ class SuccessDialog(QDialog):
         self._update_countdown()
         self._timer.start(1000)
         self.return_btn.clicked.connect(self.accept)
-        self.exit_btn.clicked.connect(QApplication.quit)
+        self.exit_btn.clicked.connect(self._safe_exit)
 
         # Set the Wabbajack icon if available
         self._set_dialog_icon()
@@ -243,7 +244,7 @@ class SuccessDialog(QDialog):
         else:
             base_message = f"You can now launch {self.modlist_name} from Steam and enjoy your modded {game_display} experience!"
 
-        # Note: ENB-specific Proton warning is now shown in a separate dialog when ENB is detected
+        # ENB Proton warning shown in separate dialog
         return base_message 
 
     def _update_countdown(self):
@@ -256,4 +257,15 @@ class SuccessDialog(QDialog):
             self.return_btn.setText(self._orig_return_text)
             self.return_btn.setEnabled(True)
             self.exit_btn.setEnabled(True)
-            self._timer.stop() 
+            self._timer.stop()
+
+    def _safe_exit(self):
+        """Safely exit the application with proper cleanup"""
+        try:
+            if self._timer.isActive():
+                self._timer.stop()
+            self.close()
+            QApplication.quit()
+        except Exception as e:
+            logger.error(f"Error during safe exit: {e}")
+            QApplication.quit() 
