@@ -14,7 +14,7 @@
 
       appImage = pkgs.fetchurl {
         url = "https://github.com/Omni-guides/Jackify/releases/download/v${version}/${appImageName}";
-        hash = "sha256-zVreomYaYfOU6pEUlZz+rVMjeuTZBKzylUMF1ComEdQ=";
+        hash = "sha256-IQtWDX3njHqJhJzBFc7DmWJy9Du+F7RadN74SAl6X/U=";
       };
 
       srcTree = builtins.path { path = self; name = "jackify-src"; };
