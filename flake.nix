@@ -9,7 +9,7 @@
       pkgs = import nixpkgs { inherit system; config.allowUnfree = true; };
       lib = pkgs.lib;
 
-      version = "0.2.1.1";
+      version = "0.5.0.4";
       appImageName = "Jackify.AppImage";
 
       appImage = pkgs.fetchurl {
